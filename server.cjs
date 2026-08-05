@@ -34,7 +34,7 @@ app.use(express.static(distPath));
 
 const YTDLP_PATH = process.platform === 'win32' 
   ? path.join(__dirname, 'yt-dlp.exe') 
-  : path.join(__dirname, 'yt-dlp');
+  : (fs.existsSync('/usr/local/bin/yt-dlp') ? '/usr/local/bin/yt-dlp' : (fs.existsSync('/usr/bin/yt-dlp') ? '/usr/bin/yt-dlp' : path.join(__dirname, 'yt-dlp')));
 
 if (process.platform !== 'win32' && fs.existsSync(YTDLP_PATH)) {
   try { fs.chmodSync(YTDLP_PATH, '755'); } catch (e) {}

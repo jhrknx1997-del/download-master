@@ -4,13 +4,17 @@ FROM node:20-bookworm-slim
 # Skip heavy browser downloads during npm install
 ENV PUPPETEER_SKIP_DOWNLOAD=true
 
-# Install Python, FFmpeg, curl, and unzip (Lightweight < 100MB build)
+# Install Python, PIP, FFmpeg, curl, and unzip
 RUN apt-get update && apt-get install -y \
     python3 \
+    python3-pip \
     ffmpeg \
     curl \
     unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install native yt-dlp via pip3 matching container's Python version exactly
+RUN pip3 install --no-cache-dir --break-system-packages -U yt-dlp
 
 # Set working directory
 WORKDIR /app
@@ -24,10 +28,6 @@ COPY . .
 
 # Build the React frontend
 RUN npm run build
-
-# Download the latest yt-dlp nightly build for Linux
-RUN curl -L -o yt-dlp https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
-    && chmod a+rx yt-dlp
 
 # Expose port 8080 (matches Railway Public Networking domain mapping)
 EXPOSE 8080
