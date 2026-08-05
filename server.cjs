@@ -563,11 +563,11 @@ app.get('/api/stream-download', async (req, res) => {
 
   let streamSuccess = false;
 
-  // Attempt 1: Standard format with FFmpeg merging (identical to localhost)
+  // Attempt 1: Fast direct download with 10-minute timeout
   try {
     const args1 = buildYtdlpArgs(targetFormat, true);
     console.log(`Starting Temp-Buffer Download (Attempt 1): yt-dlp ${args1.join(' ')}`);
-    await execFilePromise(YTDLP_PATH, args1, { timeout: 60000 });
+    await execFilePromise(YTDLP_PATH, args1, { timeout: 600000 });
     if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
       streamSuccess = true;
     }
@@ -575,13 +575,13 @@ app.get('/api/stream-download', async (req, res) => {
     console.warn('[Stream Attempt 1 Fail]:', err1.message);
   }
 
-  // Attempt 2: Fallback to single pre-merged combined format (-f "b/best")
+  // Attempt 2: Fallback to single pre-merged combined format (-f "18/22/b/best") without requiring FFmpeg
   if (!streamSuccess) {
     try {
-      const simpleFormat = isAudio ? 'bestaudio/best' : 'b/best';
+      const simpleFormat = isAudio ? 'bestaudio/140/m4a/best' : '18/22/b/best';
       const args2 = buildYtdlpArgs(simpleFormat, false);
       console.log(`Starting Temp-Buffer Download (Attempt 2): yt-dlp ${args2.join(' ')}`);
-      await execFilePromise(YTDLP_PATH, args2, { timeout: 60000 });
+      await execFilePromise(YTDLP_PATH, args2, { timeout: 600000 });
       if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
         streamSuccess = true;
       }
