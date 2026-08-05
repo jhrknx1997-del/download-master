@@ -271,8 +271,9 @@ app.post('/api/info', async (req, res) => {
 
   try {
     const data = await fetchVideoInfoWithAutoRetry(url);
-    const mins = Math.floor((data.duration || 0) / 60);
-    const secs = (data.duration || 0) % 60;
+    const totalSecs = Math.floor(Number(data.duration) || 0);
+    const mins = Math.floor(totalSecs / 60);
+    const secs = totalSecs % 60;
     const durationStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 
     // Extract all video formats (preserving pre-formatted fallbacks)
