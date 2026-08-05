@@ -1,12 +1,13 @@
 const express = require('express');
 const cors = require('cors');
-const { exec, spawn } = require('child_process');
+const { exec, execFile, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const ffmpegPath = require('ffmpeg-static');
 const util = require('util');
 const execPromise = util.promisify(exec);
+const execFilePromise = util.promisify(execFile);
 const crypto = require('crypto');
 const yts = require('yt-search');
 
@@ -469,12 +470,12 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  args.push('-f', targetFormat, '-o', `"${tempFile}"`, `"${targetUrl}"`);
+  args.push('-f', targetFormat, '-o', tempFile, targetUrl);
 
   console.log(`Starting Temp-Buffer Download: yt-dlp ${args.join(' ')}`);
 
   try {
-    await execPromise(`"${YTDLP_PATH}" ${args.join(' ')}`, { timeout: 60000 });
+    await execFilePromise(YTDLP_PATH, args, { timeout: 60000 });
     
     if (fs.existsSync(tempFile)) {
       const stat = fs.statSync(tempFile);
