@@ -539,7 +539,7 @@ app.get('/api/stream-download', async (req, res) => {
   const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
   function buildYtdlpArgs(fmt, useFfmpeg, clientType = 'ios') {
-    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4'];
+    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4', '--js-runtimes', 'node'];
     a.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1');
     if (isYouTube) {
       if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
@@ -588,7 +588,7 @@ app.get('/api/stream-download', async (req, res) => {
   // Attempt 2: TV Embedded client player
   if (!streamSuccess) {
     try {
-      const args2 = buildYtdlpArgs('18/22/b/best', false, 'tv_embedded');
+      const args2 = buildYtdlpArgs(targetFormat, false, 'tv_embedded');
       console.log(`Starting Temp-Buffer Download (Attempt 2 TV): yt-dlp ${args2.join(' ')}`);
       await execFilePromise(YTDLP_PATH, args2, { timeout: 600000 });
       if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
@@ -603,8 +603,7 @@ app.get('/api/stream-download', async (req, res) => {
   // Attempt 3: Mobile Web client player
   if (!streamSuccess) {
     try {
-      const simpleFormat = isAudio ? 'bestaudio/140/m4a/best' : '18/22/b/best';
-      const args3 = buildYtdlpArgs(simpleFormat, false, 'mweb');
+      const args3 = buildYtdlpArgs(targetFormat, false, 'mweb');
       console.log(`Starting Temp-Buffer Download (Attempt 3 MWeb): yt-dlp ${args3.join(' ')}`);
       await execFilePromise(YTDLP_PATH, args3, { timeout: 600000 });
       if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
