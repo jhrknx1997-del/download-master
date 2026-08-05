@@ -315,7 +315,7 @@ app.post('/api/info', async (req, res) => {
       videoFormats = [
         { format_id: '2160p', ext: 'mp4', quality: '2160p 4K Ultra HD', resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
         { format_id: '1440p', ext: 'mp4', quality: '1440p 2K QHD', resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
-        { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
+        { format_id: '1080p', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
         { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
         { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
         { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
@@ -700,10 +700,21 @@ app.get('/api/stream-download', async (req, res) => {
           if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
             targetStream = pData.audioStreams[0].url;
           } else if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
-            const targetHeight = parseInt(format_id) || 720;
+            let targetHeight = 0;
+            if (format_id) {
+              if (format_id === 'best' || format_id === 'max' || format_id === 'highest') {
+                targetHeight = pData.videoStreams[0].height || 2160;
+              } else {
+                targetHeight = parseInt(format_id) || 0;
+              }
+            }
+            if (!targetHeight) {
+              targetHeight = pData.videoStreams[0].height || 1080;
+            }
+
             const matched = pData.videoStreams.find(s => s.height === targetHeight && s.url)
                          || pData.videoStreams.find(s => (s.quality || '').includes(format_id) && s.url)
-                         || pData.videoStreams.find(s => s.quality && parseInt(s.quality) >= targetHeight && s.url)
+                         || pData.videoStreams.find(s => s.height >= targetHeight && s.url)
                          || pData.videoStreams[0];
             targetStream = matched ? (matched.url || matched) : null;
           }
