@@ -127,15 +127,21 @@ function App() {
   const handleDirectStreamDownload = (type) => {
     if (!result?.url) return;
     let format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
+    const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
+    const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
+    const directUrlParam = selectedObj?.direct_url ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
     const title = result?.title || 'download';
-    window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}`;
+    window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}${directUrlParam}`;
   };
 
   const copyDownloadLink = (type) => {
     if (!result?.url) return;
     let format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
+    const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
+    const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
+    const directUrlParam = selectedObj?.direct_url ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
     const title = result?.title || 'download';
-    const directLink = `${window.location.origin}/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}`;
+    const directLink = `${window.location.origin}/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}${directUrlParam}`;
     
     navigator.clipboard.writeText(directLink);
     alert('📋 Direct Download Link copied! Paste it in IDM, 1DM, or your Download Manager.');

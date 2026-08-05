@@ -79,6 +79,81 @@ async function fetchYouTubeOembedFallback(url) {
     console.warn('[oEmbed Fallback] Warning:', e.message);
   }
 
+  let videoFormats = [];
+  let audioFormats = [];
+
+  const pipedInstances = [
+    `https://pipedapi.kavin.rocks/streams/${videoId}`,
+    `https://api.piped.video/streams/${videoId}`,
+    `https://pipedapi.adminforge.de/streams/${videoId}`
+  ];
+
+  if (videoId) {
+    for (const instanceUrl of pipedInstances) {
+      try {
+        const pipedRes = await fetch(instanceUrl);
+        if (pipedRes.ok) {
+          const pipedData = await pipedRes.json();
+          if (pipedData.videoStreams && pipedData.videoStreams.length > 0) {
+            pipedData.videoStreams.forEach(s => {
+              if (s.url) {
+                videoFormats.push({
+                  format_id: 'piped_' + (s.quality || '720p'),
+                  ext: 'mp4',
+                  quality: s.quality || '720p HD',
+                  resolution: s.quality || '1280x720',
+                  filesize: s.contentLength || null,
+                  has_audio: !s.videoOnly,
+                  direct_url: s.url
+                });
+              }
+            });
+          }
+          if (pipedData.audioStreams && pipedData.audioStreams.length > 0) {
+            pipedData.audioStreams.forEach(a => {
+              if (a.url) {
+                audioFormats.push({
+                  format_id: 'piped_audio_' + (a.bitrate || 128),
+                  ext: 'mp3',
+                  quality: `${Math.round((a.bitrate || 128000) / 1000)}kbps MP3 Audio`,
+                  abr: Math.round((a.bitrate || 128000) / 1000),
+                  filesize: a.contentLength || null,
+                  direct_url: a.url
+                });
+              }
+            });
+          }
+          if (videoFormats.length > 0) break;
+        }
+      } catch (e) {
+        console.warn(`[Piped Instance Fail] ${instanceUrl}:`, e.message);
+      }
+    }
+  }
+
+  if (videoFormats.length === 0) {
+    videoFormats.push({
+      format_id: 'best',
+      ext: 'mp4',
+      quality: '720p HD',
+      resolution: '1280x720',
+      filesize: null,
+      has_audio: true,
+      direct_url: targetUrl
+    });
+  }
+
+  if (audioFormats.length === 0) {
+    audioFormats.push({
+      format_id: 'bestaudio/best',
+      ext: 'mp3',
+      quality: '320kbps MP3 Audio',
+      abr: 320,
+      filesize: null,
+      direct_url: targetUrl
+    });
+  }
+
   return {
     id: videoId || 'media',
     title: title,
@@ -86,19 +161,8 @@ async function fetchYouTubeOembedFallback(url) {
     duration: 0,
     webpage_url: targetUrl,
     url: targetUrl,
-    fallbackUsed: true,
-    videoFormats: [
-      { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: null, has_audio: true },
-      { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: null, has_audio: true },
-      { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: null, has_audio: true }
-    ],
-    audioFormats: [
-      { format_id: 'bestaudio/best', ext: 'mp3', quality: '320kbps MP3 Audio', abr: 320, filesize: null }
-    ],
-    formats: [
-      { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', vcodec: 'avc1', acodec: 'mp4a' },
-      { format_id: 'bestaudio/best', ext: 'mp3', quality: '320kbps MP3 Audio', vcodec: 'none', acodec: 'mp3', abr: 320 }
-    ]
+    videoFormats: videoFormats,
+    audioFormats: audioFormats
   };
 }
 
@@ -345,8 +409,40 @@ function spawnJobProcess(jobId) {
 
 // Instant Direct Download Stream Endpoint (0 Seconds Wait, 0 Server Disk Storage)
 app.get('/api/stream-download', (req, res) => {
-  const { url, type, format_id, title } = req.query;
-  if (!url) return res.status(400).send('URL is required');
+  const { url, type, format_id, title, direct_url } = req.query;
+  if (!url && !direct_url) return res.status(400).send('URL is required');
+
+  const targetMediaUrl = direct_url || url;
+  const isAudio = type === 'audio';
+  const ext = isAudio ? 'mp3' : 'mp4';
+  const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
+  const fileName = `${cleanTitle}.${ext}`;
+
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+
+  if (targetMediaUrl && (targetMediaUrl.startsWith('http://') || targetMediaUrl.startsWith('https://'))) {
+    if (targetMediaUrl.includes('googlevideo.com') || targetMediaUrl.includes('piped') || targetMediaUrl.includes('cdn') || targetMediaUrl.includes('.mp4') || targetMediaUrl.includes('.webm')) {
+      try {
+        const httpModule = targetMediaUrl.startsWith('https') ? require('https') : require('http');
+        const cdnReq = httpModule.get(targetMediaUrl, (cdnRes) => {
+          if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+            return res.redirect(cdnRes.headers.location);
+          }
+          if (cdnRes.headers['content-length']) {
+            res.setHeader('Content-Length', cdnRes.headers['content-length']);
+          }
+          cdnRes.pipe(res);
+        });
+        cdnReq.on('error', (e) => {
+          console.error('[Direct CDN Pipe Error]:', e.message);
+        });
+        return;
+      } catch (e) {
+        console.warn('Direct CDN pipe error, falling back to yt-dlp:', e.message);
+      }
+    }
+  }
 
   ensureCookies();
   const cookiesPath = path.join(__dirname, 'cookies.txt');
