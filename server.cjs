@@ -3,6 +3,7 @@ const cors = require('cors');
 const { exec, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const ffmpegPath = require('ffmpeg-static');
 const util = require('util');
 const execPromise = util.promisify(exec);
@@ -446,15 +447,7 @@ app.get('/api/stream-download', (req, res) => {
 
   ensureCookies();
   const cookiesPath = path.join(__dirname, 'cookies.txt');
-  const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
-
-  const isAudio = type === 'audio';
-  const ext = isAudio ? 'mp3' : 'mp4';
-  const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
-  const fileName = `${cleanTitle}.${ext}`;
-
-  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-  res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+  const isYouTube = url ? (url.includes('youtube.com') || url.includes('youtu.be')) : false;
 
   let args = ['--geo-bypass'];
   if (isYouTube) {
