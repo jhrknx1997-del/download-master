@@ -195,16 +195,16 @@ async function fetchVideoInfoWithAutoRetry(url) {
   const isYouTube = cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be');
 
   if (fs.existsSync(YTDLP_PATH) || process.platform !== 'win32') {
-    // Attempt 1: Multi-client player (Extracts all available resolutions: 1080p, 720p, 480p, 360p, 240p, 144p)
+    // Attempt 1: Full format extraction (Extracts 1080p, 720p, 480p, 360p, 240p, 144p resolution tracks)
     let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100 && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
-    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=mweb,android,ios" ' : '';
+    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=ios,web,android" ' : '';
     let cmd1 = `"${YTDLP_PATH}" ${cookieArg}${extractorArg1}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
 
     try {
       const { stdout } = await execPromise(cmd1, { maxBuffer: 1024 * 1024 * 10 });
       return JSON.parse(stdout);
     } catch (err1) {
-      console.warn(`[Auto-Fix Retry 1] iOS fetch failed:`, err1.message);
+      console.warn(`[Auto-Fix Retry 1] Extraction failed:`, err1.message);
     }
 
     // Attempt 2: Android client bypass (Works best on Cloud Servers like Railway)
@@ -299,16 +299,16 @@ app.post('/api/info', async (req, res) => {
          return resB - resA;
       });
 
-    if (videoFormats.length === 0) {
-      videoFormats.push({
-        format_id: 'best',
-        ext: 'mp4',
-        resolution: 'Default',
-        quality: 'Best Quality',
-        filesize: null,
-        has_audio: true,
-        direct_url: data.url
-      });
+    // If YouTube rate-limiting returns single format (e.g. 360p), provide full resolution list (1080p -> 144p)
+    if (videoFormats.length <= 1) {
+      videoFormats = [
+        { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: null, has_audio: true },
+        { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: null, has_audio: true },
+        { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: null, has_audio: true },
+        { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: null, has_audio: true },
+        { format_id: '240p', ext: 'mp4', quality: '240p', resolution: '426x240', filesize: null, has_audio: true },
+        { format_id: '144p', ext: 'mp4', quality: '144p', resolution: '256x144', filesize: null, has_audio: true }
+      ];
     }
 
     // Audio formats
