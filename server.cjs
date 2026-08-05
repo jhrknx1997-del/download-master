@@ -519,17 +519,22 @@ app.get('/api/stream-download', async (req, res) => {
   const targetUrl = (url && url.startsWith('http')) ? url : direct_url;
   const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
-  function buildYtdlpArgs(fmt, useFfmpeg, clientType = 'ios') {
-    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4', '--remote-components', 'ejs:github'];
-    a.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1');
+  function buildYtdlpArgs(fmt, useFfmpeg, clientType = 'android') {
+    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4'];
+    a.push('--user-agent', 'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Mobile Safari/537.36');
     if (isYouTube) {
       if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
         a.push('--cookies', cookiesPath);
       }
       a.push('--extractor-args', `youtube:player_client=${clientType}`);
     }
-    if (useFfmpeg && process.platform === 'win32' && ffmpegPath && fs.existsSync(ffmpegPath)) {
+    // Pass ffmpeg on ALL platforms (Linux/Railway needs it to mux adaptive video+audio)
+    if (useFfmpeg && ffmpegPath && fs.existsSync(ffmpegPath)) {
       a.push('--ffmpeg-location', ffmpegPath);
+    }
+    if (!isAudio) {
+      // Force mp4 container when muxing separate video+audio adaptive streams
+      a.push('--merge-output-format', 'mp4');
     }
     if (isAudio && useFfmpeg) {
       a.push('--extract-audio', '--audio-format', 'mp3');
@@ -538,15 +543,20 @@ app.get('/api/stream-download', async (req, res) => {
     return a;
   }
 
-  let targetFormat = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/22/b/best';
+  let targetFormat = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best';
   if (isAudio) {
-    targetFormat = 'bestaudio/best/140/m4a';
+    targetFormat = 'bestaudio[ext=m4a]/bestaudio/best';
   } else if (format_id && format_id !== 'undefined' && format_id !== 'best') {
     if (format_id.endsWith('p')) {
       const height = parseInt(format_id) || 720;
-      targetFormat = `b[height<=${height}]/best[height<=${height}]/bestvideo[height<=${height}]+bestaudio/bestvideo[height<=${height}][ext=mp4]+bestaudio/22/b/best`;
+      // CRITICAL FIX: Do NOT use b[height<=X] or best[height<=X] — these match format 18 (360p progressive)
+      // because b = best-single-progressive-file and 360 <= any requested height.
+      // Always use bestvideo+bestaudio (adaptive) so FFmpeg can properly mux the real HD stream.
+      targetFormat = `bestvideo[height<=${height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${height}]+bestaudio/bestvideo[height<=${height}]+bestaudio[ext=m4a]/bestvideo+bestaudio`;
+    } else if (format_id === '1080p' || format_id === 'best') {
+      targetFormat = 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio';
     } else {
-      targetFormat = `${format_id}+bestaudio/bestvideo+bestaudio/22/b/best`;
+      targetFormat = `bestvideo+bestaudio[ext=m4a]/bestvideo+bestaudio`;
     }
   }
 
@@ -607,9 +617,13 @@ app.get('/api/stream-download', async (req, res) => {
           const matchedAudio = sortedAudios.length > 0 ? sortedAudios[0] : null;
 
           // ON-THE-FLY FFMPEG MULTIPLEXING ENGINE FOR HIGH-DEFINITION (1080p, 1440p 2K, 2160p 4K)
-          const isQualityDegraded = targetHeight >= 720 && matchedVideo && matchedVideo.height && matchedVideo.height < Math.min(targetHeight - 100, 720);
+          // Reject Piped stream if the returned height is significantly lower than requested
+          const minAcceptableHeight = targetHeight > 0 ? Math.floor(targetHeight * 0.75) : 0;
+          const isQualityDegraded = targetHeight >= 480 && matchedVideo && matchedVideo.height &&
+                                    matchedVideo.height < minAcceptableHeight;
           
           if (!isQualityDegraded && matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
+            console.log(`[Piped FFmpeg Mux]: video=${matchedVideo.height}p audio=${matchedAudio.bitrate}bps`);
             res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
             res.setHeader('Content-Type', 'video/mp4');
 
@@ -633,7 +647,7 @@ app.get('/api/stream-download', async (req, res) => {
             if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
             return;
           } else if (isQualityDegraded) {
-            console.warn(`[Piped Degraded Stream]: Requested ${targetHeight}p but Piped only gave ${matchedVideo?.height}p. Proceeding to yt-dlp Android engine.`);
+            console.warn(`[Piped Degraded]: Requested ${targetHeight}p but Piped only has ${matchedVideo?.height}p (min acceptable: ${minAcceptableHeight}p). Falling back to yt-dlp.`);
           }
 
           targetStream = matchedVideo ? (matchedVideo.url || matchedVideo) : null;
@@ -677,33 +691,67 @@ app.get('/api/stream-download', async (req, res) => {
   let streamSuccess = false;
   let lastError = '';
 
-  // Attempt 2: Android client player (bypasses YouTube datacenter bot block on Cloud Servers like Railway)
+  // Minimum expected file size based on requested quality (to reject bot-serving format 18)
+  const heightForMinSize = (format_id && format_id.endsWith('p')) ? (parseInt(format_id) || 0) : 0;
+  // If height was requested, expect at least 1MB per minute * quality factor; otherwise accept any non-zero size
+  const minExpectedBytes = heightForMinSize >= 720 ? 20 * 1024 * 1024 : 1024 * 1024; // 20MB for HD, 1MB for SD
+
+  // Attempt 2: Android client player
   try {
     const args1 = buildYtdlpArgs(targetFormat, true, 'android');
-    console.log(`Starting Temp-Buffer Download (Attempt 2 Android): yt-dlp ${args1.join(' ')}`);
+    console.log(`[Attempt 2 Android]: yt-dlp ${args1.join(' ')}`);
     await execFilePromise(YTDLP_PATH, args1, { timeout: 600000 });
-    if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+    if (fs.existsSync(tempFile) && fs.statSync(tempFile).size >= minExpectedBytes) {
       streamSuccess = true;
+      console.log(`[Attempt 2 Android]: SUCCESS size=${(fs.statSync(tempFile).size/1024/1024).toFixed(1)}MB`);
+    } else if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+      console.warn(`[Attempt 2 Android]: File too small (${(fs.statSync(tempFile).size/1024/1024).toFixed(1)}MB < ${(minExpectedBytes/1024/1024).toFixed(0)}MB min). Trying higher quality client.`);
+      fs.unlink(tempFile, () => {});
     }
   } catch (err1) {
     lastError = err1.message;
-    console.warn('[Stream Attempt 2 iOS Fail]:', err1.message);
+    console.warn('[Attempt 2 Android Fail]:', err1.message.substring(0, 200));
   }
 
-  // Attempt 3: Web Embedded client player
+  // Attempt 3: mweb client (sometimes bypasses 429 bot detection on cloud IPs)
   if (!streamSuccess) {
     try {
-      const args3 = buildYtdlpArgs(targetFormat, false, 'web_embedded');
-      console.log(`Starting Temp-Buffer Download (Attempt 3 Web Embedded): yt-dlp ${args3.join(' ')}`);
+      const args3 = buildYtdlpArgs(targetFormat, true, 'mweb');
+      console.log(`[Attempt 3 mweb]: yt-dlp ${args3.join(' ')}`);
       await execFilePromise(YTDLP_PATH, args3, { timeout: 600000 });
-      if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+      if (fs.existsSync(tempFile) && fs.statSync(tempFile).size >= minExpectedBytes) {
         streamSuccess = true;
+        console.log(`[Attempt 3 mweb]: SUCCESS size=${(fs.statSync(tempFile).size/1024/1024).toFixed(1)}MB`);
+      } else if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+        console.warn(`[Attempt 3 mweb]: File too small (${(fs.statSync(tempFile).size/1024/1024).toFixed(1)}MB). Trying next.`);
+        fs.unlink(tempFile, () => {});
       }
     } catch (err3) {
       lastError = err3.message;
-      console.warn('[Stream Attempt 3 Web Embedded Fail]:', err3.message);
+      console.warn('[Attempt 3 mweb Fail]:', err3.message.substring(0, 200));
     }
   }
+
+  // Attempt 4: ios client
+  if (!streamSuccess) {
+    try {
+      const args4 = buildYtdlpArgs(targetFormat, true, 'ios');
+      console.log(`[Attempt 4 ios]: yt-dlp ${args4.join(' ')}`);
+      await execFilePromise(YTDLP_PATH, args4, { timeout: 600000 });
+      if (fs.existsSync(tempFile) && fs.statSync(tempFile).size >= minExpectedBytes) {
+        streamSuccess = true;
+        console.log(`[Attempt 4 ios]: SUCCESS size=${(fs.statSync(tempFile).size/1024/1024).toFixed(1)}MB`);
+      } else if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+        // Accept even smaller file if no better option found
+        streamSuccess = true;
+        console.warn(`[Attempt 4 ios]: Accepted small file (${(fs.statSync(tempFile).size/1024/1024).toFixed(1)}MB) as last resort.`);
+      }
+    } catch (err4) {
+      lastError = err4.message;
+      console.warn('[Attempt 4 ios Fail]:', err4.message.substring(0, 200));
+    }
+  }
+
 
   // If local execution succeeded, stream file buffer to client
   if (streamSuccess && fs.existsSync(tempFile)) {
