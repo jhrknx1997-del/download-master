@@ -302,52 +302,58 @@ function App() {
     const title = result?.title || 'download';
     const targetHeight = selectedObj ? parseInt(selectedObj.format_id) || 0 : 0;
 
-    // ⚡ INSTANT: Pre-stored Piped URLs from info fetch
-    if (type === 'video' && selectedObj?.direct_url && selectedObj?.audio_url) {
-      window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(selectedObj.direct_url)}&audio_url=${encodeURIComponent(selectedObj.audio_url)}&title=${encodeURIComponent(title)}`;
-      return;
-    }
-    if (type === 'audio' && selectedObj?.direct_url) {
-      window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(selectedObj.direct_url)}&title=${encodeURIComponent(title)}`;
-      return;
-    }
-
-    // 🔄 LIVE FETCH: Get fresh stream URLs (Piped + Invidious in parallel)
+    const isYouTube = /youtube\.com|youtu\.be/.test(result.url || '');
     const videoId = result.url?.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/)?.[1];
-    if (videoId) {
+
+    // ============================================================
+    // YOUTUBE: NEVER use yt-dlp. Always use Piped/Invidious → mux
+    // ============================================================
+    if (isYouTube && videoId) {
+      // ⚡ FAST PATH: pre-stored URLs from info fetch (zero extra requests)
+      if (type === 'video' && selectedObj?.direct_url && selectedObj?.audio_url) {
+        window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(selectedObj.direct_url)}&audio_url=${encodeURIComponent(selectedObj.audio_url)}&title=${encodeURIComponent(title)}`;
+        return;
+      }
+      if (type === 'audio' && selectedObj?.direct_url) {
+        window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(selectedObj.direct_url)}&title=${encodeURIComponent(title)}`;
+        return;
+      }
+
+      // 🔄 LIVE FETCH: fresh Piped+Invidious in parallel (~500ms)
       setIsDownloading(true);
+      setErrorMsg(null);
+
+      let bestAudio = null;
+
       try {
-        // Run Piped AND Invidious in parallel — whichever has best quality wins
-        const [pipedResult, invResult] = await Promise.allSettled([
+        const [pipedRes, invRes] = await Promise.allSettled([
           fetchPipedStreams(videoId),
           fetchInvidiousStreams(videoId)
         ]);
 
-        // Collect all candidates from both sources
         let allVideos = [];
-        let bestAudio = null;
 
-        if (pipedResult.status === 'fulfilled' && pipedResult.value) {
-          allVideos.push(...(pipedResult.value.sortedVideos || []).map(v => ({...v, source: 'piped'})));
-          if (!bestAudio) bestAudio = pipedResult.value.bestAudio;
+        if (pipedRes.status === 'fulfilled' && pipedRes.value) {
+          allVideos.push(...(pipedRes.value.sortedVideos || []));
+          bestAudio = bestAudio || pipedRes.value.bestAudio;
         }
-        if (invResult.status === 'fulfilled' && invResult.value) {
-          allVideos.push(...(invResult.value.sortedVideos || []).map(v => ({...v, source: 'invidious'})));
-          if (!bestAudio && invResult.value.bestAudio) bestAudio = invResult.value.bestAudio;
+        if (invRes.status === 'fulfilled' && invRes.value) {
+          allVideos.push(...(invRes.value.sortedVideos || []));
+          bestAudio = bestAudio || invRes.value.bestAudio;
         }
 
         allVideos.sort((a, b) => (b.height||0) - (a.height||0));
 
-        if (type === 'audio' && bestAudio?.url) {
-          window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
-          setIsDownloading(false);
-          return;
-        }
-
-        if (type === 'video' && allVideos.length > 0) {
+        if (type === 'audio') {
+          if (bestAudio?.url) {
+            window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
+            setIsDownloading(false);
+            return;
+          }
+        } else {
           const bestVideo = (targetHeight > 0
             ? allVideos.find(v => v.height === targetHeight) || allVideos.find(v => v.height <= targetHeight)
-            : null) || allVideos[0];
+            : null) || allVideos[0] || null;
 
           if (bestVideo?.url) {
             if (bestAudio?.url) {
@@ -361,18 +367,19 @@ function App() {
             return;
           }
         }
-
-        // All streaming sources failed — show clear error
-        alert('Could not fetch stream from any source (Piped + Invidious all unavailable). Please try again in a few minutes.');
-        setIsDownloading(false);
-        return;
-      } catch(e) {
-        console.error('[Download error]', e);
-        setIsDownloading(false);
+      } catch (e) {
+        console.error('[YouTube download error]', e);
       }
+
+      // All YouTube sources failed — show error in UI, NEVER call yt-dlp
+      setIsDownloading(false);
+      alert('⚠️ All stream sources unavailable (Piped + Invidious). Please try again in a minute.');
+      return;
     }
 
-    // ⛔ Non-YouTube only (Twitter, Instagram, etc.) — yt-dlp works on these
+    // ============================================================
+    // NON-YOUTUBE: Twitter, TikTok, Instagram, Facebook, etc.
+    // ============================================================
     window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}`;
   };
 

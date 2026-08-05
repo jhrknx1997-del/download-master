@@ -28,9 +28,19 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', version: '2026-v2-bulletproof' });
 });
 
-// Serve static frontend files
-const distPath = path.join(__dirname, 'dist');
-app.use(express.static(distPath));
+
+// Serve JS/CSS assets with long cache (content-hashed filenames)
+app.use('/assets', express.static(path.join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
+
+// Serve index.html with NO cache — always get latest JS bundle reference
+app.use(express.static(distPath, { index: false }));
+app.get('/', (req, res) => {
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
 
 const YTDLP_PATH = process.platform === 'win32' 
   ? path.join(__dirname, 'yt-dlp.exe') 
