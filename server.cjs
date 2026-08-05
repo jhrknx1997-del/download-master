@@ -763,13 +763,15 @@ app.post('/api/start-download', async (req, res) => {
   await ensureCookies();
 
   const isAudio = type === 'audio';
-  let format = isAudio ? 'bestaudio/best' : 'best/bestvideo+bestaudio';
-  
-  if (format_id) {
-    if (!isAudio && (has_audio === 'false' || has_audio === false)) {
-      format = `${format_id}+bestaudio/best`;
-    } else {
-      format = format_id;
+  let format = 'bestvideo+bestaudio/best';
+  if (isAudio) {
+    format = 'bestaudio/best/140/m4a';
+  } else if (format_id) {
+    if (format_id.endsWith('p')) {
+      const h = parseInt(format_id) || 720;
+      format = `bestvideo[height<=${h}]+bestaudio/bestvideo[height<=${h}][ext=mp4]+bestaudio/bestvideo+bestaudio/best`;
+    } else if (format_id !== 'best') {
+      format = `${format_id}+bestaudio/bestvideo+bestaudio/best`;
     }
   }
 
@@ -779,26 +781,33 @@ app.post('/api/start-download', async (req, res) => {
   const filePath = path.join(TEMP_DIR, fileName);
 
   const args = [
+    '--no-playlist',
     '--geo-bypass',
-    '--ffmpeg-location', ffmpegPath,
+    '--force-ipv4',
+    '--remote-components', 'ejs:github',
     '-f', format,
-    '-o', filePath,
-    url
+    '-o', filePath
   ];
 
+  if (process.platform === 'win32' && ffmpegPath && fs.existsSync(ffmpegPath)) {
+    args.push('--ffmpeg-location', ffmpegPath);
+  }
+
   if (!isAudio) {
-    args.unshift('--merge-output-format', ext);
+    args.push('--merge-output-format', ext);
+  } else {
+    args.push('--extract-audio', '--audio-format', 'mp3');
   }
 
   const cookiesPath = path.join(__dirname, 'cookies.txt');
-  if (fs.existsSync(cookiesPath) && (url.includes('youtube.com') || url.includes('youtu.be'))) {
-    args.unshift('--cookies', cookiesPath);
-    args.unshift('--extractor-args', 'youtube:player_client=default');
+  if (url.includes('youtube.com') || url.includes('youtu.be')) {
+    if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
+      args.push('--cookies', cookiesPath);
+    }
+    args.push('--extractor-args', 'youtube:player_client=ios');
   }
 
-  if (isAudio) {
-    args.push('--extract-audio', '--audio-format', 'mp3');
-  }
+  args.push(url);
 
   jobs.set(jobId, {
     id: jobId,
