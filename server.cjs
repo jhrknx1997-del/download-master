@@ -539,7 +539,7 @@ app.get('/api/stream-download', async (req, res) => {
       }
       a.push('--extractor-args', 'youtube:player_client=android');
     }
-    if (useFfmpeg && ffmpegPath && fs.existsSync(ffmpegPath)) {
+    if (useFfmpeg && process.platform === 'win32' && ffmpegPath && fs.existsSync(ffmpegPath)) {
       a.push('--ffmpeg-location', ffmpegPath);
     }
     if (isAudio && useFfmpeg) {
