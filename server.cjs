@@ -191,15 +191,11 @@ async function fetchVideoInfoWithAutoRetry(url) {
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   const isYouTube = cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be');
 
-  const ytdlpBin = process.platform === 'win32' 
-    ? path.join(__dirname, 'yt-dlp.exe') 
-    : path.join(__dirname, 'yt-dlp');
-
-  if (fs.existsSync(ytdlpBin)) {
+  if (fs.existsSync(YTDLP_PATH) || process.platform !== 'win32') {
     // Attempt 1: Standard extraction (with cookies if valid size > 100 bytes)
     let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100 && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
-    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=ios,android,mweb" ' : '';
-    let cmd1 = `"${ytdlpBin}" ${cookieArg}${extractorArg1}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
+    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=android" ' : '';
+    let cmd1 = `"${YTDLP_PATH}" ${cookieArg}${extractorArg1}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
 
     try {
       const { stdout } = await execPromise(cmd1, { maxBuffer: 1024 * 1024 * 10 });
@@ -210,7 +206,7 @@ async function fetchVideoInfoWithAutoRetry(url) {
 
     // Attempt 2: Android client bypass (Works best on Cloud Servers like Railway)
     let extractorArg2 = isYouTube ? '--extractor-args "youtube:player_client=android" ' : '';
-    let cmd2 = `"${ytdlpBin}" ${extractorArg2}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
+    let cmd2 = `"${YTDLP_PATH}" ${extractorArg2}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
     try {
       const { stdout } = await execPromise(cmd2, { maxBuffer: 1024 * 1024 * 10 });
       return JSON.parse(stdout);
@@ -220,7 +216,7 @@ async function fetchVideoInfoWithAutoRetry(url) {
 
     // Attempt 3: TV Embedded client bypass
     let extractorArg3 = isYouTube ? '--extractor-args "youtube:player_client=tv_embedded" ' : '';
-    let cmd3 = `"${ytdlpBin}" ${extractorArg3}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
+    let cmd3 = `"${YTDLP_PATH}" ${extractorArg3}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
     try {
       const { stdout } = await execPromise(cmd3, { maxBuffer: 1024 * 1024 * 10 });
       return JSON.parse(stdout);
