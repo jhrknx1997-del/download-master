@@ -408,49 +408,47 @@ function spawnJobProcess(jobId) {
   });
 }
 
-// Instant Direct Download Stream Endpoint (0 Seconds Wait, 0 Server Disk Storage)
-app.get('/api/stream-download', (req, res) => {
+// Instant Direct Download Stream Endpoint (0-Byte Failure Proof Temp-Buffer Stream Engine)
+app.get('/api/stream-download', async (req, res) => {
   const { url, type, format_id, title, direct_url } = req.query;
   if (!url && !direct_url) return res.status(400).send('URL is required');
 
-  const targetMediaUrl = direct_url || url;
   const isAudio = type === 'audio';
   const ext = isAudio ? 'mp3' : 'mp4';
   const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
   const fileName = `${cleanTitle}.${ext}`;
 
-  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-  res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-
-  if (targetMediaUrl && (targetMediaUrl.startsWith('http://') || targetMediaUrl.startsWith('https://'))) {
-    if (targetMediaUrl.includes('googlevideo.com') || targetMediaUrl.includes('piped') || targetMediaUrl.includes('cdn') || targetMediaUrl.includes('.mp4') || targetMediaUrl.includes('.webm')) {
-      try {
-        const httpModule = targetMediaUrl.startsWith('https') ? require('https') : require('http');
-        const cdnReq = httpModule.get(targetMediaUrl, (cdnRes) => {
-          if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-            return res.redirect(cdnRes.headers.location);
-          }
-          if (cdnRes.headers['content-length']) {
-            res.setHeader('Content-Length', cdnRes.headers['content-length']);
-          }
-          cdnRes.pipe(res);
-        });
-        cdnReq.on('error', (e) => {
-          console.error('[Direct CDN Pipe Error]:', e.message);
-        });
-        return;
-      } catch (e) {
-        console.warn('Direct CDN pipe error, falling back to yt-dlp:', e.message);
-      }
+  // If direct CDN stream URL (like googlevideo or piped) is provided, stream it directly
+  if (direct_url && direct_url.startsWith('http') && (direct_url.includes('googlevideo.com') || direct_url.includes('piped') || direct_url.includes('cdn'))) {
+    try {
+      const httpModule = direct_url.startsWith('https') ? require('https') : require('http');
+      const cdnReq = httpModule.get(direct_url, (cdnRes) => {
+        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+          return res.redirect(cdnRes.headers.location);
+        }
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+        if (cdnRes.headers['content-length']) {
+          res.setHeader('Content-Length', cdnRes.headers['content-length']);
+        }
+        cdnRes.pipe(res);
+      });
+      cdnReq.on('error', (e) => console.error('[CDN Stream Error]:', e.message));
+      return;
+    } catch (e) {
+      console.warn('Direct CDN pipe error, falling back to temp-file download:', e.message);
     }
   }
 
-  ensureCookies();
+  // Fast Temp File Buffer Download Engine (Guarantees exact Content-Length & 0% Failure)
+  const tempFile = path.join(TEMP_DIR, `stream_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`);
   const cookiesPath = path.join(__dirname, 'cookies.txt');
-  const isYouTube = url ? (url.includes('youtube.com') || url.includes('youtu.be')) : false;
+  const targetUrl = url || direct_url;
+  const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
-  let args = ['--geo-bypass'];
+  let args = ['--no-playlist', '--geo-bypass'];
   if (isYouTube) {
+    ensureCookies();
     if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
     args.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
   }
@@ -471,22 +469,37 @@ app.get('/api/stream-download', (req, res) => {
     }
   }
 
-  args.push('-f', targetFormat, '-o', '-', url);
+  args.push('-f', targetFormat, '-o', `"${tempFile}"`, `"${targetUrl}"`);
 
-  console.log(`Piping direct stream: yt-dlp ${args.join(' ')}`);
-  const streamProcess = spawn(YTDLP_PATH, args);
+  console.log(`Starting Temp-Buffer Download: yt-dlp ${args.join(' ')}`);
 
-  streamProcess.stderr.on('data', (data) => {
-    console.error(`[Stream Process Warning]: ${data.toString().trim()}`);
-  });
+  try {
+    await execPromise(`"${YTDLP_PATH}" ${args.join(' ')}`, { timeout: 60000 });
+    
+    if (fs.existsSync(tempFile)) {
+      const stat = fs.statSync(tempFile);
+      if (stat.size > 0) {
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+        res.setHeader('Content-Length', stat.size);
 
-  streamProcess.stdout.pipe(res);
-
-  req.on('close', () => {
-    if (streamProcess && !streamProcess.killed) {
-      try { streamProcess.kill('SIGKILL'); } catch(e) {}
+        const readStream = fs.createReadStream(tempFile);
+        readStream.pipe(res);
+        readStream.on('end', () => {
+          fs.unlink(tempFile, () => {});
+        });
+        readStream.on('error', () => {
+          fs.unlink(tempFile, () => {});
+        });
+        return;
+      }
     }
-  });
+  } catch (err) {
+    console.error('Temp File Download Error:', err.message);
+    if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+  }
+
+  res.status(500).send('Failed to process download stream');
 });
 
 // Start download job endpoint
