@@ -25,11 +25,89 @@ function App() {
     document.body.removeChild(link);
   };
 
+  const fetchClientSideInfo = async (videoUrl) => {
+    const videoIdMatch = videoUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    if (!videoIdMatch) return null;
+    const videoId = videoIdMatch[1];
+
+    const pipedInstances = [
+      `https://pipedapi.adminforge.de/streams/${videoId}`,
+      `https://pipedapi.drgns.space/streams/${videoId}`,
+      `https://pipedapi.lunar.icu/streams/${videoId}`,
+      `https://pipedapi.systemli.org/streams/${videoId}`,
+      `https://pipedapi.palvelu.org/streams/${videoId}`,
+      `https://pipedapi.mha.fi/streams/${videoId}`
+    ];
+
+    for (const inst of pipedInstances) {
+      try {
+        const res = await fetch(inst);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.title) {
+            const vStreams = (data.videoStreams || []).map(v => {
+              const h = v.height || parseInt(v.quality) || 720;
+              let qLabel = `${h}p`;
+              if (h >= 2160) qLabel = '2160p 4K Ultra HD';
+              else if (h >= 1440) qLabel = '1440p 2K QHD';
+              else if (h >= 1080) qLabel = '1080p Full HD';
+              else if (h >= 720) qLabel = '720p HD';
+
+              return {
+                format_id: `piped_${h}p`,
+                ext: 'mp4',
+                quality: qLabel,
+                resolution: `${v.width || 1280}x${h}`,
+                filesize: v.contentLength || null,
+                direct_url: v.url
+              };
+            });
+
+            const aStreams = (data.audioStreams || []).map(a => ({
+              format_id: 'piped_audio',
+              ext: 'mp3',
+              quality: `${Math.round((a.bitrate || 128000) / 1000)}kbps MP3 Audio`,
+              filesize: a.contentLength || null,
+              direct_url: a.url
+            }));
+
+            return {
+              title: data.title,
+              thumbnail: data.thumbnailUrl,
+              duration: `${Math.floor((data.duration || 0) / 60)}:${((data.duration || 0) % 60).toString().padStart(2, '0')}`,
+              source: 'YouTube',
+              url: videoUrl,
+              videoFormats: vStreams.length > 0 ? vStreams : null,
+              audioFormats: aStreams.length > 0 ? aStreams : null
+            };
+          }
+        }
+      } catch (e) {}
+    }
+    return null;
+  };
+
   const handleFetch = async (targetUrl) => {
     setIsSearching(true);
     setResult(null);
     setErrorMsg(null);
     setSearchResults([]);
+
+    // 1. Try Client-Side Browser Direct Fetching First (Snaptube/Vidmate Residential IP approach)
+    const clientData = await fetchClientSideInfo(targetUrl);
+    if (clientData) {
+      setResult(clientData);
+      if (clientData.videoFormats && clientData.videoFormats.length > 0) {
+        setSelectedVideoFormat(clientData.videoFormats[0].format_id);
+      }
+      if (clientData.audioFormats && clientData.audioFormats.length > 0) {
+        setSelectedAudioFormat(clientData.audioFormats[0].format_id);
+      }
+      setIsSearching(false);
+      return;
+    }
+
+    // 2. Server Fallback
     try {
       const response = await fetch('/api/info', {
         method: 'POST',
