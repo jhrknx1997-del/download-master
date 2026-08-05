@@ -198,9 +198,23 @@ function App() {
     let format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
     const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
     const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
-    const directUrlParam = (selectedObj?.direct_url && selectedObj?.format_id?.startsWith('piped')) ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
+
+    // If client-side direct CDN URL exists, download directly in user's browser using their own IP!
+    if (selectedObj && selectedObj.direct_url) {
+      const a = document.createElement('a');
+      a.href = selectedObj.direct_url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.download = `${result.title || 'media'}.${type === 'audio' ? 'mp3' : 'mp4'}`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }
+
+    // Fallback to server stream
     const title = result?.title || 'download';
-    window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}${directUrlParam}`;
+    window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}`;
   };
 
   const copyDownloadLink = (type) => {
@@ -208,12 +222,11 @@ function App() {
     let format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
     const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
     const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
-    const directUrlParam = (selectedObj?.direct_url && selectedObj?.format_id?.startsWith('piped')) ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
-    const title = result?.title || 'download';
-    const directLink = `${window.location.origin}/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}${directUrlParam}`;
+
+    const targetLink = selectedObj?.direct_url || `${window.location.origin}/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}`;
     
-    navigator.clipboard.writeText(directLink);
-    alert('📋 Direct Download Link copied! Paste it in IDM, 1DM, or your Download Manager.');
+    navigator.clipboard.writeText(targetLink);
+    alert('📋 Direct CDN Stream Link copied! Paste it in IDM, 1DM, or your Download Manager.');
   };
 
 
