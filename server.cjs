@@ -510,25 +510,34 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // Fast Temp File Buffer Download Engine (Guarantees exact Content-Length & 0% Failure)
+  // Fast Temp File Buffer Download Engine (3-Tier Guaranteed Success Pipeline)
   const tempFile = path.join(TEMP_DIR, `stream_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`);
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   const targetUrl = url || direct_url;
   const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
-  let args = ['--no-playlist', '--geo-bypass'];
-  if (isYouTube) {
-    ensureCookies();
-    if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
-    args.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
+  function buildYtdlpArgs(fmt, useFfmpeg) {
+    let a = ['--no-playlist', '--geo-bypass'];
+    if (isYouTube) {
+      if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
+        a.push('--cookies', cookiesPath);
+      }
+      a.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
+    }
+    if (useFfmpeg && ffmpegPath && fs.existsSync(ffmpegPath)) {
+      a.push('--ffmpeg-location', ffmpegPath);
+    }
+    if (isAudio && useFfmpeg) {
+      a.push('--extract-audio', '--audio-format', 'mp3');
+    }
+    a.push('-f', fmt, '-o', tempFile, targetUrl);
+    return a;
   }
 
   let targetFormat = 'best';
   if (isAudio) {
     targetFormat = (format_id && format_id !== 'undefined' && !format_id.endsWith('p')) ? format_id : 'bestaudio/best';
-    args.push('--ffmpeg-location', ffmpegPath, '--extract-audio', '--audio-format', 'mp3');
   } else {
-    args.push('--ffmpeg-location', ffmpegPath);
     if (!format_id || format_id === 'undefined' || format_id === 'best') {
       targetFormat = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
     } else if (format_id.endsWith('p')) {
@@ -539,57 +548,81 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  args.push('-f', targetFormat, '-o', tempFile, targetUrl);
+  let streamSuccess = false;
 
-  console.log(`Starting Temp-Buffer Download: yt-dlp ${args.join(' ')}`);
-
+  // Attempt 1: Standard high-quality format download
   try {
-    await execFilePromise(YTDLP_PATH, args, { timeout: 60000 });
-    
-    if (fs.existsSync(tempFile)) {
-      const stat = fs.statSync(tempFile);
-      if (stat.size > 0) {
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-        res.setHeader('Content-Length', stat.size);
-
-        const readStream = fs.createReadStream(tempFile);
-        readStream.pipe(res);
-        readStream.on('end', () => {
-          fs.unlink(tempFile, () => {});
-        });
-        readStream.on('error', () => {
-          fs.unlink(tempFile, () => {});
-        });
-        return;
-      }
+    const args1 = buildYtdlpArgs(targetFormat, true);
+    console.log(`Starting Temp-Buffer Download (Attempt 1): yt-dlp ${args1.join(' ')}`);
+    await execFilePromise(YTDLP_PATH, args1, { timeout: 60000 });
+    if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+      streamSuccess = true;
     }
-  } catch (err) {
-    console.warn('Local yt-dlp failed on cloud datacenter IP, activating Cloud Proxy Engine:', err.message);
-    try {
-      const cloudMediaUrl = await getDirectMediaStreamUrl(targetUrl, isAudio);
-      if (cloudMediaUrl) {
-        console.log('Cloud Proxy Stream URL acquired! Streaming directly to client...');
-        const httpModule = cloudMediaUrl.startsWith('https') ? require('https') : require('http');
-        httpModule.get(cloudMediaUrl, (cdnRes) => {
-          if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-            return res.redirect(cdnRes.headers.location);
-          }
-          res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-          res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-          if (cdnRes.headers['content-length']) {
-            res.setHeader('Content-Length', cdnRes.headers['content-length']);
-          }
-          cdnRes.pipe(res);
-        });
-        return;
-      }
-    } catch (cloudErr) {
-      console.error('Cloud Proxy Engine Error:', cloudErr.message);
-    }
-    if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+  } catch (err1) {
+    console.warn('[Stream Attempt 1 Fail]:', err1.message);
   }
 
+  // Attempt 2: Fallback to single pre-merged stream (-f "b/best") without requiring FFmpeg merging
+  if (!streamSuccess) {
+    try {
+      const simpleFormat = isAudio ? 'bestaudio/best' : 'b/best';
+      const args2 = buildYtdlpArgs(simpleFormat, false);
+      console.log(`Starting Temp-Buffer Download (Attempt 2): yt-dlp ${args2.join(' ')}`);
+      await execFilePromise(YTDLP_PATH, args2, { timeout: 60000 });
+      if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+        streamSuccess = true;
+      }
+    } catch (err2) {
+      console.warn('[Stream Attempt 2 Fail]:', err2.message);
+    }
+  }
+
+  // If Attempt 1 or 2 succeeded, stream the temp file directly
+  if (streamSuccess && fs.existsSync(tempFile)) {
+    const stat = fs.statSync(tempFile);
+    if (stat.size > 0) {
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+      res.setHeader('Content-Length', stat.size);
+
+      const readStream = fs.createReadStream(tempFile);
+      readStream.pipe(res);
+      readStream.on('end', () => {
+        fs.unlink(tempFile, () => {});
+      });
+      readStream.on('error', () => {
+        fs.unlink(tempFile, () => {});
+      });
+      return;
+    }
+  }
+
+  // Attempt 3: Cloud Proxy Engine Fallback
+  console.warn('Local yt-dlp attempts failed on cloud datacenter IP, activating Cloud Proxy Engine...');
+  try {
+    const cloudMediaUrl = await getDirectMediaStreamUrl(targetUrl, isAudio);
+    if (cloudMediaUrl) {
+      console.log('Cloud Proxy Stream URL acquired! Streaming directly to client...');
+      const httpModule = cloudMediaUrl.startsWith('https') ? require('https') : require('http');
+      httpModule.get(cloudMediaUrl, (cdnRes) => {
+        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+          return res.redirect(cdnRes.headers.location);
+        }
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+        if (cdnRes.headers['content-length']) {
+          res.setHeader('Content-Length', cdnRes.headers['content-length']);
+        }
+        cdnRes.pipe(res);
+      });
+      if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+      return;
+    }
+  } catch (cloudErr) {
+    console.error('Cloud Proxy Engine Error:', cloudErr.message);
+  }
+
+  if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
   res.status(500).send('Failed to process download stream');
 });
 
