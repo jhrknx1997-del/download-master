@@ -195,9 +195,9 @@ async function fetchVideoInfoWithAutoRetry(url) {
   const isYouTube = cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be');
 
   if (fs.existsSync(YTDLP_PATH) || process.platform !== 'win32') {
-    // Attempt 1: Full format extraction (Extracts 1080p, 720p, 480p, 360p, 240p, 144p resolution tracks)
+    // Attempt 1: Full format extraction with iOS client (bypasses bot challenges and PO tokens)
     let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100 && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
-    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=ios,web,android" ' : '';
+    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=ios" ' : '';
     let cmd1 = `"${YTDLP_PATH}" ${cookieArg}${extractorArg1}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
 
     try {
