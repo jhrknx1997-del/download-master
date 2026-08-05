@@ -466,9 +466,7 @@ async function getDirectMediaStreamUrl(youtubeUrl, isAudio) {
             return pData.audioStreams[0].url;
           }
           if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
-            const combined = pData.videoStreams.find(v => !v.videoOnly && v.url);
-            if (combined) return combined.url;
-            if (pData.videoStreams[0].url) return pData.videoStreams[0].url;
+            return pData.videoStreams[0].url || pData.videoStreams[0];
           }
         }
       } catch (e) {
@@ -705,7 +703,7 @@ app.get('/api/stream-download', async (req, res) => {
             const targetHeight = parseInt(format_id) || 720;
             const matched = pData.videoStreams.find(s => s.height === targetHeight && s.url)
                          || pData.videoStreams.find(s => (s.quality || '').includes(format_id) && s.url)
-                         || pData.videoStreams.find(s => !s.videoOnly && s.url)
+                         || pData.videoStreams.find(s => s.quality && parseInt(s.quality) >= targetHeight && s.url)
                          || pData.videoStreams[0];
             targetStream = matched ? (matched.url || matched) : null;
           }
