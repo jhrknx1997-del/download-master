@@ -4,7 +4,14 @@ const { exec, execFile, spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const ffmpegPath = require('ffmpeg-static');
+let ffmpegPath = require('ffmpeg-static');
+if (process.platform !== 'win32') {
+  if (fs.existsSync('/usr/bin/ffmpeg')) {
+    ffmpegPath = '/usr/bin/ffmpeg';
+  } else if (ffmpegPath && fs.existsSync(ffmpegPath)) {
+    try { fs.chmodSync(ffmpegPath, '755'); } catch (e) {}
+  }
+}
 const util = require('util');
 const execPromise = util.promisify(exec);
 const execFilePromise = util.promisify(execFile);
