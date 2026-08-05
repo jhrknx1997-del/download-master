@@ -395,19 +395,9 @@ function App() {
                           <button 
                             style={{ background: '#10b981', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.88rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)' }}
                             onClick={() => {
-                              if (f.direct_url) {
-                                const a = document.createElement('a');
-                                a.href = f.direct_url;
-                                a.target = '_blank';
-                                a.rel = 'noopener noreferrer';
-                                a.download = `${result.title || 'video'}.mp4`;
-                                document.body.appendChild(a);
-                                a.click();
-                                document.body.removeChild(a);
-                              } else {
-                                const title = result?.title || 'download';
-                                window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=video&format_id=${encodeURIComponent(f.format_id || '')}&title=${encodeURIComponent(title)}`;
-                              }
+                              const title = result?.title || 'video';
+                              const fmt = f.format_id || f.quality || '1080p';
+                              window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=video&format_id=${encodeURIComponent(fmt)}&title=${encodeURIComponent(title)}`;
                             }}
                           >
                             <Download size={15} />
@@ -438,21 +428,11 @@ function App() {
                           </div>
 
                           <button 
-                            style={{ background: '#10b981', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.88rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 129, 0.3)' }}
+                            style={{ background: '#10b981', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.88rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)' }}
                             onClick={() => {
-                              if (a.direct_url) {
-                                const el = document.createElement('a');
-                                el.href = a.direct_url;
-                                el.target = '_blank';
-                                el.rel = 'noopener noreferrer';
-                                el.download = `${result.title || 'audio'}.mp3`;
-                                document.body.appendChild(el);
-                                el.click();
-                                document.body.removeChild(el);
-                              } else {
-                                const title = result?.title || 'download';
-                                window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=audio&format_id=${encodeURIComponent(a.format_id || '')}&title=${encodeURIComponent(title)}`;
-                              }
+                              const title = result?.title || 'audio';
+                              const fmt = a.format_id || 'bestaudio';
+                              window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=audio&format_id=${encodeURIComponent(fmt)}&title=${encodeURIComponent(title)}`;
                             }}
                           >
                             <Music size={15} />

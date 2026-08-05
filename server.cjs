@@ -550,7 +550,7 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // Attempt 1: Multi-Instance Piped Media Stream Proxy + On-The-Fly FFmpeg Multiplexing (Fastest, 100% Bypasses Datacenter Bot Checks)
+  // Attempt 1: Parallel Multi-Instance Piped Media Stream Proxy + On-The-Fly FFmpeg Multiplexing
   const vMatch = targetUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   if (vMatch) {
     const videoId = vMatch[1];
@@ -562,95 +562,104 @@ app.get('/api/stream-download', async (req, res) => {
       `https://pipedapi.palvelu.org/streams/${videoId}`,
       `https://pipedapi.mha.fi/streams/${videoId}`
     ];
-    for (const pUrl of pipedInstances) {
+
+    const fetchPipedNode = async (pUrl) => {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 2500);
       try {
-        const pRes = await fetch(pUrl);
+        const pRes = await fetch(pUrl, { signal: controller.signal });
+        clearTimeout(tid);
         if (pRes.ok) {
-          const pData = await pRes.json();
-          let targetStream = null;
-          if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
-            let targetHeight = 0;
-            if (format_id) {
-              if (format_id === 'best' || format_id === 'max' || format_id === 'highest') {
-                targetHeight = pData.videoStreams[0].height || 2160;
-              } else {
-                targetHeight = parseInt(format_id) || 0;
-              }
-            }
-            if (!targetHeight) {
-              targetHeight = pData.videoStreams[0].height || 1080;
-            }
-
-            const matchedVideo = pData.videoStreams.find(s => s.height === targetHeight && s.url)
-                              || pData.videoStreams.find(s => (s.quality || '').includes(format_id) && s.url)
-                              || pData.videoStreams.find(s => s.height >= targetHeight && s.url)
-                              || pData.videoStreams[0];
-            
-            const matchedAudio = (pData.audioStreams && pData.audioStreams.length > 0) ? pData.audioStreams[0] : null;
-
-            // ON-THE-FLY FFMPEG MULTIPLEXING ENGINE FOR HIGH-DEFINITION (1080p, 1440p 2K, 2160p 4K)
-            if (matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
-              res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-              res.setHeader('Content-Type', 'video/mp4');
-
-              const ffProc = spawn(ffmpegPath, [
-                '-y',
-                '-i', matchedVideo.url,
-                '-i', matchedAudio.url,
-                '-c:v', 'copy',
-                '-c:a', 'aac',
-                '-movflags', 'frag_keyframe+empty_moov',
-                '-f', 'mp4',
-                'pipe:1'
-              ]);
-
-              ffProc.stdout.pipe(res);
-
-              req.on('close', () => {
-                try { ffProc.kill(); } catch (e) {}
-              });
-              
-              if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-              return;
-            }
-
-            targetStream = matchedVideo ? (matchedVideo.url || matchedVideo) : null;
-          }
-
-          if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
-            targetStream = pData.audioStreams[0].url;
-          }
-
-          if (targetStream && targetStream.startsWith('http')) {
-            const streamDone = await new Promise((resolve) => {
-              const httpMod = targetStream.startsWith('https') ? require('https') : require('http');
-              const cdnReq = httpMod.get(targetStream, (cdnRes) => {
-                if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-                  res.redirect(cdnRes.headers.location);
-                  return resolve(true);
-                }
-                if (cdnRes.statusCode === 200) {
-                  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-                  res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-                  if (cdnRes.headers['content-length']) {
-                    res.setHeader('Content-Length', cdnRes.headers['content-length']);
-                  }
-                  cdnRes.pipe(res);
-                  return resolve(true);
-                }
-                cdnReq.destroy();
-                resolve(false);
-              });
-              cdnReq.on('error', () => resolve(false));
-            });
-            if (streamDone) {
-              if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-              return;
-            }
+          const data = await pRes.json();
+          if (data && (data.videoStreams?.length > 0 || data.audioStreams?.length > 0)) {
+            return data;
           }
         }
-      } catch (e) {}
-    }
+      } catch (e) {
+        clearTimeout(tid);
+      }
+      throw new Error('piped_fail');
+    };
+
+    try {
+      const pData = await Promise.any(pipedInstances.map(fetchPipedNode));
+      if (pData) {
+        let targetStream = null;
+        if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
+          let targetHeight = parseInt(format_id) || 0;
+          if (!targetHeight) {
+            targetHeight = pData.videoStreams[0].height || 1080;
+          }
+
+          const matchedVideo = pData.videoStreams.find(s => s.height === targetHeight && s.url)
+                            || pData.videoStreams.find(s => (s.quality || '').includes(format_id) && s.url)
+                            || pData.videoStreams.find(s => s.height <= targetHeight && s.url)
+                            || pData.videoStreams[0];
+          
+          const matchedAudio = (pData.audioStreams && pData.audioStreams.length > 0) ? pData.audioStreams[0] : null;
+
+          // ON-THE-FLY FFMPEG MULTIPLEXING ENGINE FOR HIGH-DEFINITION (1080p, 1440p 2K, 2160p 4K)
+          if (matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+            res.setHeader('Content-Type', 'video/mp4');
+
+            const ffProc = spawn(ffmpegPath, [
+              '-y',
+              '-i', matchedVideo.url,
+              '-i', matchedAudio.url,
+              '-c:v', 'copy',
+              '-c:a', 'aac',
+              '-movflags', 'frag_keyframe+empty_moov',
+              '-f', 'mp4',
+              'pipe:1'
+            ]);
+
+            ffProc.stdout.pipe(res);
+
+            req.on('close', () => {
+              try { ffProc.kill(); } catch (e) {}
+            });
+            
+            if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+            return;
+          }
+
+          targetStream = matchedVideo ? (matchedVideo.url || matchedVideo) : null;
+        }
+
+        if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
+          targetStream = pData.audioStreams[0].url;
+        }
+
+        if (targetStream && targetStream.startsWith('http')) {
+          const streamDone = await new Promise((resolve) => {
+            const httpMod = targetStream.startsWith('https') ? require('https') : require('http');
+            const cdnReq = httpMod.get(targetStream, (cdnRes) => {
+              if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+                res.redirect(cdnRes.headers.location);
+                return resolve(true);
+              }
+              if (cdnRes.statusCode === 200) {
+                res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+                res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+                if (cdnRes.headers['content-length']) {
+                  res.setHeader('Content-Length', cdnRes.headers['content-length']);
+                }
+                cdnRes.pipe(res);
+                return resolve(true);
+              }
+              cdnReq.destroy();
+              resolve(false);
+            });
+            cdnReq.on('error', () => resolve(false));
+          });
+          if (streamDone) {
+            if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+            return;
+          }
+        }
+      }
+    } catch (e) {}
   }
 
   let streamSuccess = false;
