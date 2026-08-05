@@ -562,6 +562,7 @@ app.get('/api/stream-download', async (req, res) => {
   }
 
   let streamSuccess = false;
+  let lastError = '';
 
   // Attempt 1: Fast direct download with 10-minute timeout
   try {
@@ -572,6 +573,7 @@ app.get('/api/stream-download', async (req, res) => {
       streamSuccess = true;
     }
   } catch (err1) {
+    lastError = err1.message;
     console.warn('[Stream Attempt 1 Fail]:', err1.message);
   }
 
@@ -586,6 +588,7 @@ app.get('/api/stream-download', async (req, res) => {
         streamSuccess = true;
       }
     } catch (err2) {
+      lastError = err2.message;
       console.warn('[Stream Attempt 2 Fail]:', err2.message);
     }
   }
@@ -632,10 +635,11 @@ app.get('/api/stream-download', async (req, res) => {
     }
   } catch (cloudErr) {
     console.error('Cloud Proxy Engine Error:', cloudErr.message);
+    lastError += ` | CloudErr: ${cloudErr.message}`;
   }
 
   if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-  res.status(500).send('Failed to process download stream');
+  res.status(500).send(`Failed to process download stream: ${lastError}`);
 });
 
 // Start download job endpoint
