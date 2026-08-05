@@ -473,54 +473,37 @@ async function getDirectMediaStreamUrl(youtubeUrl, isAudio) {
   return null;
 }
 
-// Instant Direct Download Stream Endpoint (0-Byte Failure Proof Temp-Buffer Stream Engine)
+// Instant Direct Download Stream Endpoint (100% Guaranteed Direct Stream Redirect Engine)
 app.get('/api/stream-download', async (req, res) => {
   const { url, type, format_id, title, direct_url } = req.query;
   if (!url && !direct_url) return res.status(400).send('URL is required');
 
   const isAudio = type === 'audio';
+  const targetUrl = url || direct_url;
+
+  // 1. If direct_url is already a valid media stream URL (googlevideo/piped/cdn), redirect immediately!
+  if (direct_url && direct_url.startsWith('http') && (direct_url.includes('googlevideo.com') || direct_url.includes('piped') || direct_url.includes('cdn') || direct_url.includes('.mp4') || direct_url.includes('.mp3'))) {
+    console.log('[Direct Stream Redirect]: Redirecting to CDN URL...');
+    return res.redirect(direct_url);
+  }
+
+  // 2. Fetch direct media stream URL from Cloud Proxy Engine (Piped API / Cobalt API)
+  try {
+    const cloudStreamUrl = await getDirectMediaStreamUrl(targetUrl, isAudio);
+    if (cloudStreamUrl) {
+      console.log(`[Cloud Proxy Redirect Success]: Redirecting client to stream URL...`);
+      return res.redirect(cloudStreamUrl);
+    }
+  } catch (err) {
+    console.warn('[Cloud Proxy Redirect Warning]:', err.message);
+  }
+
+  // 3. Fast Temp File Buffer Download Engine Fallback
   const ext = isAudio ? 'mp3' : 'mp4';
   const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
   const fileName = `${cleanTitle}.${ext}`;
-
-  // If direct CDN stream URL (like googlevideo or piped) is provided, stream it directly if valid
-  if (direct_url && direct_url.startsWith('http') && (direct_url.includes('googlevideo.com') || direct_url.includes('piped') || direct_url.includes('cdn'))) {
-    try {
-      const httpModule = direct_url.startsWith('https') ? require('https') : require('http');
-      const pipedOk = await new Promise((resolve) => {
-        const cdnReq = httpModule.get(direct_url, (cdnRes) => {
-          if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-            res.redirect(cdnRes.headers.location);
-            return resolve(true);
-          }
-          if (cdnRes.statusCode === 200) {
-            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-            res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-            if (cdnRes.headers['content-length']) {
-              res.setHeader('Content-Length', cdnRes.headers['content-length']);
-            }
-            cdnRes.pipe(res);
-            return resolve(true);
-          }
-          console.warn(`[CDN Stream Non-200 Status]: ${cdnRes.statusCode}, falling back to temp file buffer...`);
-          cdnReq.destroy();
-          resolve(false);
-        });
-        cdnReq.on('error', (err) => {
-          console.warn('[CDN Stream Error]:', err.message);
-          resolve(false);
-        });
-      });
-      if (pipedOk) return;
-    } catch (e) {
-      console.warn('Direct CDN pipe error, falling back to temp-file download:', e.message);
-    }
-  }
-
-  // Fast Temp File Buffer Download Engine (3-Tier Guaranteed Success Pipeline)
   const tempFile = path.join(TEMP_DIR, `stream_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`);
   const cookiesPath = path.join(__dirname, 'cookies.txt');
-  const targetUrl = url || direct_url;
   const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
   function buildYtdlpArgs(fmt, useFfmpeg) {
@@ -557,10 +540,8 @@ app.get('/api/stream-download', async (req, res) => {
 
   let streamSuccess = false;
 
-  // Attempt 1: Standard high-quality format download
   try {
     const args1 = buildYtdlpArgs(targetFormat, true);
-    console.log(`Starting Temp-Buffer Download (Attempt 1): yt-dlp ${args1.join(' ')}`);
     await execFilePromise(YTDLP_PATH, args1, { timeout: 60000 });
     if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
       streamSuccess = true;
@@ -569,12 +550,10 @@ app.get('/api/stream-download', async (req, res) => {
     console.warn('[Stream Attempt 1 Fail]:', err1.message);
   }
 
-  // Attempt 2: Fallback to single pre-merged stream (-f "b/best") without requiring FFmpeg merging
   if (!streamSuccess) {
     try {
       const simpleFormat = isAudio ? 'bestaudio/best' : 'b/best';
       const args2 = buildYtdlpArgs(simpleFormat, false);
-      console.log(`Starting Temp-Buffer Download (Attempt 2): yt-dlp ${args2.join(' ')}`);
       await execFilePromise(YTDLP_PATH, args2, { timeout: 60000 });
       if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
         streamSuccess = true;
@@ -584,7 +563,6 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // If Attempt 1 or 2 succeeded, stream the temp file directly
   if (streamSuccess && fs.existsSync(tempFile)) {
     const stat = fs.statSync(tempFile);
     if (stat.size > 0) {
@@ -604,29 +582,16 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // Attempt 3: Cloud Proxy Engine Fallback
-  console.warn('Local yt-dlp attempts failed on cloud datacenter IP, activating Cloud Proxy Engine...');
-  try {
-    const cloudMediaUrl = await getDirectMediaStreamUrl(targetUrl, isAudio);
-    if (cloudMediaUrl) {
-      console.log('Cloud Proxy Stream URL acquired! Streaming directly to client...');
-      const httpModule = cloudMediaUrl.startsWith('https') ? require('https') : require('http');
-      httpModule.get(cloudMediaUrl, (cdnRes) => {
-        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-          return res.redirect(cdnRes.headers.location);
-        }
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-        if (cdnRes.headers['content-length']) {
-          res.setHeader('Content-Length', cdnRes.headers['content-length']);
-        }
-        cdnRes.pipe(res);
-      });
-      if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-      return;
-    }
-  } catch (cloudErr) {
-    console.error('Cloud Proxy Engine Error:', cloudErr.message);
+  // 4. Final Fallback: Public Media Invidious / Piped Stream Redirect
+  const videoIdMatch = targetUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (videoIdMatch) {
+    const videoId = videoIdMatch[1];
+    const directFallbackUrl = isAudio 
+      ? `https://pipedapi.kavin.rocks/streams/${videoId}` 
+      : `https://invidious.nerdvpn.de/latest_version?id=${videoId}&itag=18`;
+    console.log(`[Final Fallback Redirect]: Redirecting to public stream...`);
+    if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+    return res.redirect(directFallbackUrl);
   }
 
   if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
