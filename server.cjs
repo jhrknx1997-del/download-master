@@ -368,20 +368,29 @@ app.get('/api/stream-download', (req, res) => {
 
   let targetFormat = 'best';
   if (isAudio) {
-    targetFormat = (format_id && format_id !== 'undefined') ? format_id : 'bestaudio/best';
+    targetFormat = (format_id && format_id !== 'undefined' && !format_id.endsWith('p')) ? format_id : 'bestaudio/best';
     args.push('--ffmpeg-location', ffmpegPath, '--extract-audio', '--audio-format', 'mp3');
   } else {
     args.push('--ffmpeg-location', ffmpegPath);
-    if (format_id && format_id !== 'undefined') {
-      targetFormat = `${format_id}+bestaudio/best`;
+    if (!format_id || format_id === 'undefined' || format_id === 'best') {
+      targetFormat = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
+    } else if (format_id.endsWith('p')) {
+      const height = parseInt(format_id) || 720;
+      targetFormat = `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`;
     } else {
-      targetFormat = 'bestvideo+bestaudio/best';
+      targetFormat = `${format_id}+bestaudio/best`;
     }
   }
 
   args.push('-f', targetFormat, '-o', '-', url);
 
+  console.log(`Piping direct stream: yt-dlp ${args.join(' ')}`);
   const streamProcess = spawn(YTDLP_PATH, args);
+
+  streamProcess.stderr.on('data', (data) => {
+    console.error(`[Stream Process Warning]: ${data.toString().trim()}`);
+  });
+
   streamProcess.stdout.pipe(res);
 
   req.on('close', () => {
