@@ -276,7 +276,7 @@ app.post('/api/info', async (req, res) => {
     const durationStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 
     // Extract all video formats (preserving pre-formatted fallbacks)
-    let videoFormats = data.videoFormats || (data.formats || [])
+    let rawFormats = (data.formats || [])
       .filter(f => f.vcodec !== 'none')
       .map(f => {
         let displayHeight = f.height || (f.format_note ? parseInt(f.format_note) : 0);
@@ -302,8 +302,10 @@ app.post('/api/info', async (req, res) => {
          return resB - resA;
       });
 
-    // If YouTube rate-limiting returns single format (e.g. 360p), provide full resolution list (1080p -> 144p)
-    if (videoFormats.length <= 1) {
+    let videoFormats = data.videoFormats || (rawFormats.length > 1 ? rawFormats : null);
+
+    // If single format or fallback returned, provide full resolution list (1080p -> 144p)
+    if (!videoFormats || videoFormats.length <= 1) {
       videoFormats = [
         { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: null, has_audio: true },
         { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: null, has_audio: true },
