@@ -193,29 +193,156 @@ function App() {
     }
   };
 
-  const handleDirectStreamDownload = (type) => {
+  const handleDirectStreamDownload = async (type) => {
     if (!result?.url) return;
     let format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
     const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
     const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
+    const title = result?.title || 'download';
 
-    // If client-side direct CDN URL exists, download directly in user's browser using their own IP!
+    // =========================================================================
+    // WORLD-CLASS ARCHITECTURE: Use client's own IP to extract Piped stream URLs
+    // (bypasses Railway's 429 bot-blocked IP) then mux on server with FFmpeg
+    // =========================================================================
+    const videoIdMatch = result.url?.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    const videoId = videoIdMatch ? videoIdMatch[1] : null;
+
+    if (videoId && type === 'video') {
+      const targetHeight = selectedObj ? (parseInt(selectedObj.format_id) || parseInt(selectedObj.quality) || 0) : 0;
+
+      // Fetch ALL Piped instances in parallel using USER's browser IP (no 429!)
+      const pipedInstances = [
+        `https://pipedapi.adminforge.de/streams/${videoId}`,
+        `https://pipedapi.drgns.space/streams/${videoId}`,
+        `https://pipedapi.lunar.icu/streams/${videoId}`,
+        `https://pipedapi.systemli.org/streams/${videoId}`,
+        `https://pipedapi.palvelu.org/streams/${videoId}`,
+        `https://pipedapi.mha.fi/streams/${videoId}`
+      ];
+
+      const fetchPiped = async (url) => {
+        const ctrl = new AbortController();
+        setTimeout(() => ctrl.abort(), 5000);
+        try {
+          const r = await fetch(url, { signal: ctrl.signal });
+          if (r.ok) { const d = await r.json(); if (d?.videoStreams?.length > 0) return d; }
+        } catch (e) {}
+        return null;
+      };
+
+      try {
+        const allResults = await Promise.allSettled(pipedInstances.map(fetchPiped));
+        const valid = allResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+
+        if (valid.length > 0) {
+          // Collect best video stream per height across all instances
+          const videoMap = {};
+          const audioMap = {};
+          for (const d of valid) {
+            for (const v of (d.videoStreams || [])) {
+              if (!v.url || !v.height) continue;
+              if (!videoMap[v.height] || (v.bitrate || 0) > (videoMap[v.height].bitrate || 0)) {
+                videoMap[v.height] = v;
+              }
+            }
+            for (const a of (d.audioStreams || [])) {
+              if (!a.url) continue;
+              const k = a.bitrate || 128;
+              if (!audioMap[k] || (a.bitrate || 0) > (audioMap[k].bitrate || 0)) audioMap[k] = a;
+            }
+          }
+
+          const sortedVideos = Object.values(videoMap).sort((a, b) => (b.height || 0) - (a.height || 0));
+          const sortedAudios = Object.values(audioMap).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+          // Pick best video at or below requested height
+          let bestVideo = null;
+          if (targetHeight > 0) {
+            bestVideo = sortedVideos.find(v => v.height === targetHeight)
+                     || sortedVideos.find(v => v.height <= targetHeight)
+                     || sortedVideos[0];
+          } else {
+            bestVideo = sortedVideos[0];
+          }
+          const bestAudio = sortedAudios[0] || null;
+
+          if (bestVideo && bestVideo.url) {
+            console.log(`[Client Piped]: Using ${bestVideo.height}p video (${valid.length} instances polled)`);
+
+            if (bestAudio && bestAudio.url) {
+              // Adaptive streams: send video+audio URLs to server for FFmpeg mux
+              console.log(`[Mux-Stream]: video=${bestVideo.height}p + audio=${bestAudio.bitrate}bps`);
+              const muxUrl = `/api/mux-stream?video_url=${encodeURIComponent(bestVideo.url)}&audio_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
+              window.location.href = muxUrl;
+              return;
+            } else {
+              // Video-only stream: download directly from Piped CDN
+              const a = document.createElement('a');
+              a.href = bestVideo.url;
+              a.target = '_blank';
+              a.rel = 'noopener noreferrer';
+              a.download = `${title}.mp4`;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              return;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('[Client Piped failed, using fallback]', e.message);
+      }
+    }
+
+    // Audio download: use direct_url from Piped if available, or server fallback
+    if (type === 'audio') {
+      const videoIdMatch2 = result.url?.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+      const vid2 = videoIdMatch2 ? videoIdMatch2[1] : null;
+      if (vid2) {
+        const pipedInstances = [
+          `https://pipedapi.adminforge.de/streams/${vid2}`,
+          `https://pipedapi.drgns.space/streams/${vid2}`
+        ];
+        for (const inst of pipedInstances) {
+          try {
+            const ctrl = new AbortController();
+            setTimeout(() => ctrl.abort(), 4000);
+            const r = await fetch(inst, { signal: ctrl.signal });
+            if (r.ok) {
+              const d = await r.json();
+              const best = (d.audioStreams || []).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+              if (best && best.url) {
+                const a = document.createElement('a');
+                a.href = `/api/mux-stream?video_url=${encodeURIComponent(best.url)}&title=${encodeURIComponent(title)}`;
+                a.download = `${title}.mp3`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                return;
+              }
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    // If client-side direct CDN URL exists, download directly
     if (selectedObj && selectedObj.direct_url) {
       const a = document.createElement('a');
       a.href = selectedObj.direct_url;
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
-      a.download = `${result.title || 'media'}.${type === 'audio' ? 'mp3' : 'mp4'}`;
+      a.download = `${title}.${type === 'audio' ? 'mp3' : 'mp4'}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       return;
     }
 
-    // Fallback to server stream
-    const title = result?.title || 'download';
+    // Final server fallback
     window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}`;
   };
+
 
   const copyDownloadLink = (type) => {
     if (!result?.url) return;

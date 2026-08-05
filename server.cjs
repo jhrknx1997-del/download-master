@@ -473,8 +473,118 @@ async function getDirectMediaStreamUrl(youtubeUrl, isAudio) {
   return null;
 }
 
+// =============================================================================
+// WORLD-CLASS ARCHITECTURE: Client extracts stream URLs with user's own IP,
+// server ONLY does FFmpeg muxing. No yt-dlp, no 429 errors.
+// =============================================================================
+
+// Client-side Piped best-quality aggregator (for App.jsx to call)
+app.get('/api/client-piped', async (req, res) => {
+  const { videoId } = req.query;
+  if (!videoId) return res.status(400).json({ error: 'videoId required' });
+
+  const pipedInstances = [
+    `https://pipedapi.adminforge.de/streams/${videoId}`,
+    `https://pipedapi.drgns.space/streams/${videoId}`,
+    `https://pipedapi.lunar.icu/streams/${videoId}`,
+    `https://pipedapi.systemli.org/streams/${videoId}`,
+    `https://pipedapi.palvelu.org/streams/${videoId}`,
+    `https://pipedapi.mha.fi/streams/${videoId}`
+  ];
+
+  const fetchOne = async (url) => {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    try {
+      const r = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+      clearTimeout(t);
+      if (r.ok) { const d = await r.json(); if (d?.videoStreams?.length > 0) return d; }
+    } catch (e) { clearTimeout(t); }
+    return null;
+  };
+
+  const allResults = await Promise.allSettled(pipedInstances.map(fetchOne));
+  const valid = allResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value);
+
+  if (valid.length === 0) return res.status(503).json({ error: 'All Piped instances unavailable' });
+
+  // Collect best stream per resolution across all instances
+  const videoMap = {};
+  const audioMap = {};
+  for (const d of valid) {
+    for (const v of (d.videoStreams || [])) {
+      if (!v.url || !v.height) continue;
+      if (!videoMap[v.height] || (v.bitrate || 0) > (videoMap[v.height].bitrate || 0)) {
+        videoMap[v.height] = v;
+      }
+    }
+    for (const a of (d.audioStreams || [])) {
+      if (!a.url) continue;
+      const k = a.bitrate || 128;
+      if (!audioMap[k]) audioMap[k] = a;
+    }
+  }
+
+  const videoStreams = Object.values(videoMap).sort((a, b) => (b.height || 0) - (a.height || 0));
+  const audioStreams = Object.values(audioMap).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  const best = valid[0];
+
+  res.json({
+    title: best.title,
+    thumbnail: best.thumbnailUrl,
+    duration: best.duration,
+    videoStreams,
+    audioStreams
+  });
+});
+
+// /api/mux-stream: Browser provides video_url + audio_url (extracted client-side with user's IP),
+// server FFmpeg-muxes and streams the result. No yt-dlp needed, no 429 possible.
+app.get('/api/mux-stream', async (req, res) => {
+  const { video_url, audio_url, title } = req.query;
+  if (!video_url) return res.status(400).send('video_url required');
+
+  const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
+  const fileName = `${cleanTitle}.mp4`;
+
+  if (!ffmpegPath || !fs.existsSync(ffmpegPath)) {
+    return res.status(500).send('FFmpeg not available on this server');
+  }
+
+  console.log(`[Mux-Stream]: Muxing video=${video_url.substring(0, 60)}... audio=${audio_url ? audio_url.substring(0, 60) + '...' : 'none'}`);
+
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('Content-Type', 'video/mp4');
+
+  const ffArgs = ['-y'];
+  ffArgs.push('-i', video_url);
+  if (audio_url) {
+    ffArgs.push('-i', audio_url);
+    ffArgs.push('-c:v', 'copy', '-c:a', 'aac');
+  } else {
+    ffArgs.push('-c:v', 'copy', '-an'); // video only
+  }
+  ffArgs.push('-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1');
+
+  const ffProc = spawn(ffmpegPath, ffArgs);
+
+  ffProc.stdout.pipe(res);
+  ffProc.stderr.on('data', d => {
+    const line = d.toString().trim();
+    if (line.includes('Error') || line.includes('error')) console.error('[MuxStream FFmpeg]:', line.substring(0, 150));
+  });
+
+  ffProc.on('error', (err) => {
+    console.error('[MuxStream FFmpeg Error]:', err.message);
+    if (!res.headersSent) res.status(500).send('FFmpeg mux error: ' + err.message);
+  });
+
+  req.on('close', () => { try { ffProc.kill(); } catch (e) {} });
+});
+
 // Instant Direct Download Stream Endpoint (100% Localhost-Identical Stream Engine)
 app.get('/api/stream-download', async (req, res) => {
+
   const { url, type, format_id, title, direct_url } = req.query;
   if (!url && !direct_url) return res.status(400).send('URL is required');
 
