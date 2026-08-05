@@ -332,10 +332,21 @@ function App() {
               ) : (
                 <div className="download-options">
                   <div className="option-col">
-                    <button className="btn-option primary" onClick={() => handleDirectStreamDownload('video')}>
+                    <button className="btn-option primary" onClick={() => {
+                      const isHighRes = ['2160p', '1440p', '1080p', 'best'].includes(selectedVideoFormat) || (parseInt(selectedVideoFormat) >= 1080);
+                      if (isHighRes) {
+                        handleDownload('video');
+                      } else {
+                        handleDirectStreamDownload('video');
+                      }
+                    }}>
                       <Video size={24} />
                       <span className="option-type">MP4 Video</span>
-                      <span className="option-desc">Instant 1-Step Download</span>
+                      <span className="option-desc">
+                        {['2160p', '1440p', '1080p', 'best'].includes(selectedVideoFormat) || (parseInt(selectedVideoFormat) >= 1080)
+                          ? 'Full HD/2K/4K Merged Download' 
+                          : 'Instant 1-Step Download'}
+                      </span>
                     </button>
                     {result.videoFormats && result.videoFormats.length > 0 && (
                       <select 
@@ -351,13 +362,22 @@ function App() {
                         ))}
                       </select>
                     )}
-                    <button 
-                      className="btn-action"
-                      style={{ marginTop: '8px', background: 'rgba(255, 255, 255, 0.08)', color: '#94a3b8', fontSize: '0.8rem' }}
-                      onClick={() => copyDownloadLink('video')}
-                    >
-                      📋 Copy Link for IDM / 1DM
-                    </button>
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '8px' }}>
+                      <button 
+                        className="btn-action"
+                        style={{ flex: 1, background: 'rgba(255, 255, 255, 0.08)', color: '#60a5fa', fontSize: '0.78rem' }}
+                        onClick={() => handleDownload('video')}
+                      >
+                        🎬 Server Merged (Full Size)
+                      </button>
+                      <button 
+                        className="btn-action"
+                        style={{ flex: 1, background: 'rgba(255, 255, 255, 0.08)', color: '#94a3b8', fontSize: '0.78rem' }}
+                        onClick={() => copyDownloadLink('video')}
+                      >
+                        📋 Copy Link
+                      </button>
+                    </div>
                   </div>
 
                   <div className="option-col">
