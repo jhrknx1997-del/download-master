@@ -346,7 +346,7 @@ function App() {
                       >
                         {result.videoFormats.map(f => (
                           <option key={f.format_id} value={f.format_id}>
-                            {f.quality} {f.filesize ? `(~${(f.filesize / 1024 / 1024).toFixed(1)}MB)` : ''}
+                            {f.quality} {f.filesize ? `(${(f.filesize / 1024 / 1024).toFixed(1)} MB)` : ''}
                           </option>
                         ))}
                       </select>
@@ -375,7 +375,7 @@ function App() {
                       >
                         {result.audioFormats.map(f => (
                           <option key={f.format_id} value={f.format_id}>
-                            {f.quality} {f.filesize ? `(~${(f.filesize / 1024 / 1024).toFixed(1)}MB)` : ''}
+                            {f.quality} {f.filesize ? `(${(f.filesize / 1024 / 1024).toFixed(1)} MB)` : ''}
                           </option>
                         ))}
                       </select>

@@ -162,22 +162,22 @@ async function fetchYouTubeOembedFallback(url) {
   if (videoFormats.length === 0) {
     const secs = duration || 270;
     videoFormats = [
-      { format_id: '2160p', ext: 'mp4', quality: `2160p 4K Ultra HD (~${Math.round(secs * 2.2)}MB)`, resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
-      { format_id: '1440p', ext: 'mp4', quality: `1440p 2K QHD (~${Math.round(secs * 1.1)}MB)`, resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
-      { format_id: 'best', ext: 'mp4', quality: `1080p Full HD (~${Math.round(secs * 0.55)}MB)`, resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
-      { format_id: '720p', ext: 'mp4', quality: `720p HD (~${Math.round(secs * 0.3)}MB)`, resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
-      { format_id: '480p', ext: 'mp4', quality: `480p SD (~${Math.round(secs * 0.15)}MB)`, resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
-      { format_id: '360p', ext: 'mp4', quality: `360p SD (~${Math.round(secs * 0.08)}MB)`, resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
-      { format_id: '240p', ext: 'mp4', quality: `240p (~${Math.round(secs * 0.04)}MB)`, resolution: '426x240', filesize: Math.round(secs * 0.04 * 1024 * 1024), has_audio: true },
-      { format_id: '144p', ext: 'mp4', quality: `144p (~${Math.round(secs * 0.02)}MB)`, resolution: '256x144', filesize: Math.round(secs * 0.02 * 1024 * 1024), has_audio: true }
+      { format_id: '2160p', ext: 'mp4', quality: '2160p 4K Ultra HD', resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
+      { format_id: '1440p', ext: 'mp4', quality: '1440p 2K QHD', resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
+      { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
+      { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
+      { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
+      { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
+      { format_id: '240p', ext: 'mp4', quality: '240p', resolution: '426x240', filesize: Math.round(secs * 0.04 * 1024 * 1024), has_audio: true },
+      { format_id: '144p', ext: 'mp4', quality: '144p', resolution: '256x144', filesize: Math.round(secs * 0.02 * 1024 * 1024), has_audio: true }
     ];
   }
 
   if (audioFormats.length === 0) {
     const secs = duration || 270;
     audioFormats = [
-      { format_id: 'bestaudio/best', ext: 'mp3', quality: `320kbps MP3 Audio (~${Math.round(secs * 0.04)}MB)`, abr: 320, filesize: Math.round(secs * 0.04 * 1024 * 1024) },
-      { format_id: '128kbps', ext: 'mp3', quality: `128kbps MP3 Audio (~${Math.round(secs * 0.016)}MB)`, abr: 128, filesize: Math.round(secs * 0.016 * 1024 * 1024) }
+      { format_id: 'bestaudio/best', ext: 'mp3', quality: '320kbps MP3 Audio', abr: 320, filesize: Math.round(secs * 0.04 * 1024 * 1024) },
+      { format_id: '128kbps', ext: 'mp3', quality: '128kbps MP3 Audio', abr: 128, filesize: Math.round(secs * 0.016 * 1024 * 1024) }
     ];
   }
 
@@ -313,14 +313,14 @@ app.post('/api/info', async (req, res) => {
     if (!videoFormats || videoFormats.length <= 1) {
       const secs = totalSecs || 270;
       videoFormats = [
-        { format_id: '2160p', ext: 'mp4', quality: `2160p 4K Ultra HD (~${Math.round(secs * 2.2)}MB)`, resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
-        { format_id: '1440p', ext: 'mp4', quality: `1440p 2K QHD (~${Math.round(secs * 1.1)}MB)`, resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
-        { format_id: 'best', ext: 'mp4', quality: `1080p Full HD (~${Math.round(secs * 0.55)}MB)`, resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
-        { format_id: '720p', ext: 'mp4', quality: `720p HD (~${Math.round(secs * 0.3)}MB)`, resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
-        { format_id: '480p', ext: 'mp4', quality: `480p SD (~${Math.round(secs * 0.15)}MB)`, resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
-        { format_id: '360p', ext: 'mp4', quality: `360p SD (~${Math.round(secs * 0.08)}MB)`, resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
-        { format_id: '240p', ext: 'mp4', quality: `240p (~${Math.round(secs * 0.04)}MB)`, resolution: '426x240', filesize: Math.round(secs * 0.04 * 1024 * 1024), has_audio: true },
-        { format_id: '144p', ext: 'mp4', quality: `144p (~${Math.round(secs * 0.02)}MB)`, resolution: '256x144', filesize: Math.round(secs * 0.02 * 1024 * 1024), has_audio: true }
+        { format_id: '2160p', ext: 'mp4', quality: '2160p 4K Ultra HD', resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
+        { format_id: '1440p', ext: 'mp4', quality: '1440p 2K QHD', resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
+        { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
+        { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
+        { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
+        { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
+        { format_id: '240p', ext: 'mp4', quality: '240p', resolution: '426x240', filesize: Math.round(secs * 0.04 * 1024 * 1024), has_audio: true },
+        { format_id: '144p', ext: 'mp4', quality: '144p', resolution: '256x144', filesize: Math.round(secs * 0.02 * 1024 * 1024), has_audio: true }
       ];
     }
 
