@@ -19,9 +19,13 @@ app.use(express.json());
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
 
-const os = require('os');
-const YTDLP_PATH = path.join(__dirname, 'yt-dlp.exe');
-const TEMP_DIR = path.join(os.homedir(), 'Downloads', 'DownMaster');
+const YTDLP_PATH = process.platform === 'win32' 
+  ? path.join(__dirname, 'yt-dlp.exe') 
+  : path.join(__dirname, 'yt-dlp');
+
+const TEMP_DIR = process.platform === 'win32'
+  ? path.join(os.homedir(), 'Downloads', 'DownMaster')
+  : '/tmp/DownMaster';
 
 if (!fs.existsSync(TEMP_DIR)) {
   fs.mkdirSync(TEMP_DIR, { recursive: true });

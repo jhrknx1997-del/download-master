@@ -31,12 +31,6 @@ RUN npm run build
 RUN curl -L -o yt-dlp https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     && chmod a+rx yt-dlp
 
-# Change the yt-dlp path in server.cjs to use the Linux binary we just downloaded
-RUN sed -i "s/yt-dlp.exe/yt-dlp/g" server.cjs
-
-# Change the temporary download directory to /tmp/DownMaster
-RUN sed -i "s/path.join(os.homedir(), 'Downloads', 'DownMaster')/'\/tmp\/DownMaster'/g" server.cjs
-
 # Expose port 5000
 EXPOSE 5000
 
