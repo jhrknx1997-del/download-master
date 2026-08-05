@@ -2,9 +2,92 @@ import React, { useState } from 'react';
 import { Download, MonitorPlay, Smartphone, Globe, Laptop, Search, Zap, Shield, Music, Video } from 'lucide-react';
 import './App.css';
 
+// All Piped instances — fetched in parallel, best quality wins
+const PIPED_INSTANCES = [
+  'https://pipedapi.adminforge.de',
+  'https://pipedapi.drgns.space',
+  'https://pipedapi.lunar.icu',
+  'https://pipedapi.systemli.org',
+  'https://pipedapi.palvelu.org',
+  'https://pipedapi.mha.fi',
+  'https://api.piped.yt',
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.tokhmi.xyz',
+  'https://pipedapi.privacy.com.de',
+];
+
+// Invidious instances — alternative backend if Piped fails
+const INVIDIOUS_INSTANCES = [
+  'https://inv.tux.pizza',
+  'https://invidious.io.lol',
+  'https://invidious.privacydev.net',
+  'https://invidious.nerdvpn.de',
+  'https://yewtu.be',
+];
+
+// Fetch best streams from ALL Piped instances in parallel
+async function fetchPipedStreams(videoId) {
+  const results = await Promise.allSettled(PIPED_INSTANCES.map(async (base) => {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(`${base}/streams/${videoId}`, { signal: ctrl.signal });
+    if (!r.ok) throw new Error('bad');
+    const d = await r.json();
+    if (!d?.videoStreams?.length) throw new Error('empty');
+    return d;
+  }));
+  const valid = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+  if (!valid.length) return null;
+  const videoMap = {}, audioMap = {};
+  for (const d of valid) {
+    for (const v of (d.videoStreams || [])) {
+      if (!v.url || !v.height) continue;
+      if (!videoMap[v.height] || (v.bitrate||0) > (videoMap[v.height].bitrate||0)) videoMap[v.height] = v;
+    }
+    for (const a of (d.audioStreams || [])) {
+      if (!a.url) continue;
+      if (!audioMap[a.bitrate||128] || (a.bitrate||0) > (audioMap[a.bitrate||128].bitrate||0)) audioMap[a.bitrate||128] = a;
+    }
+  }
+  const sortedVideos = Object.values(videoMap).sort((a,b) => (b.height||0)-(a.height||0));
+  const sortedAudios = Object.values(audioMap).sort((a,b) => (b.bitrate||0)-(a.bitrate||0));
+  return { sortedVideos, bestAudio: sortedAudios[0] || null, source: 'piped' };
+}
+
+// Fetch from Invidious API — returns direct YouTube CDN URLs
+async function fetchInvidiousStreams(videoId) {
+  const results = await Promise.allSettled(INVIDIOUS_INSTANCES.map(async (base) => {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 5000);
+    const r = await fetch(`${base}/api/v1/videos/${videoId}?fields=adaptiveFormats`, { signal: ctrl.signal });
+    if (!r.ok) throw new Error('bad');
+    return r.json();
+  }));
+  const valid = results.filter(r => r.status === 'fulfilled').map(r => r.value);
+  if (!valid.length) return null;
+  const videoMap = {}, audioMap = {};
+  for (const d of valid) {
+    for (const f of (d.adaptiveFormats || [])) {
+      if (!f.url) continue;
+      if (f.type?.startsWith('video/') && f.resolution) {
+        const h = parseInt(f.resolution) || 0;
+        if (h && (!videoMap[h] || (f.bitrate||0) > (videoMap[h].bitrate||0)))
+          videoMap[h] = { height: h, url: f.url, bitrate: f.bitrate, width: f.size?.split('x')[0]||'' };
+      } else if (f.type?.startsWith('audio/')) {
+        if (!audioMap[f.bitrate||128] || (f.bitrate||0) > (audioMap[f.bitrate||128].bitrate||0))
+          audioMap[f.bitrate||128] = { url: f.url, bitrate: f.bitrate };
+      }
+    }
+  }
+  const sortedVideos = Object.values(videoMap).sort((a,b) => (b.height||0)-(a.height||0));
+  const sortedAudios = Object.values(audioMap).sort((a,b) => (b.bitrate||0)-(a.bitrate||0));
+  return { sortedVideos, bestAudio: sortedAudios[0] || null, source: 'invidious' };
+}
+
 function App() {
   const [url, setUrl] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [result, setResult] = useState(null);
   const [searchResults, setSearchResults] = useState([]);
   
@@ -13,6 +96,7 @@ function App() {
   const [showPreview, setShowPreview] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState(null);
+
 
   const handleSaveThumbnail = () => {
     if (!result?.thumbnail) return;
@@ -30,45 +114,30 @@ function App() {
     if (!videoIdMatch) return null;
     const videoId = videoIdMatch[1];
 
-    const pipedInstances = [
-      `https://pipedapi.adminforge.de/streams/${videoId}`,
-      `https://pipedapi.drgns.space/streams/${videoId}`,
-      `https://pipedapi.lunar.icu/streams/${videoId}`,
-      `https://pipedapi.systemli.org/streams/${videoId}`,
-      `https://pipedapi.palvelu.org/streams/${videoId}`,
-      `https://pipedapi.mha.fi/streams/${videoId}`
-    ];
+    // ⚡ LIGHTNING: Promise.any = first Piped instance to respond wins (~300ms)
+    // Gets video+audio URLs from same instance — pre-stored for instant download
+    const pipedInstances = PIPED_INSTANCES.map(base => `${base}/streams/${videoId}`);
 
-    // ⚡ Fetch ALL instances in parallel — fastest possible response
-    const allResults = await Promise.allSettled(pipedInstances.map(async (inst) => {
+    const d = await Promise.any(pipedInstances.map(async (inst) => {
       const ctrl = new AbortController();
       setTimeout(() => ctrl.abort(), 4000);
       const r = await fetch(inst, { signal: ctrl.signal });
       if (!r.ok) throw new Error('bad');
-      const d = await r.json();
-      if (!d?.videoStreams?.length) throw new Error('empty');
-      return d;
+      const data = await r.json();
+      if (!data?.videoStreams?.length) throw new Error('empty');
+      return data;
     }));
 
-    const valid = allResults.filter(r => r.status === 'fulfilled').map(r => r.value);
-    if (valid.length === 0) return null;
+    if (!d) return null;
 
-    // Collect BEST stream per height & best audio across ALL instances
-    const videoMap = {};
-    let bestAudio = null;
-    for (const d of valid) {
-      for (const v of (d.videoStreams || [])) {
-        if (!v.url || !v.height) continue;
-        if (!videoMap[v.height] || (v.bitrate || 0) > (videoMap[v.height].bitrate || 0)) videoMap[v.height] = v;
-      }
-      for (const a of (d.audioStreams || [])) {
-        if (!a.url) continue;
-        if (!bestAudio || (a.bitrate || 0) > (bestAudio.bitrate || 0)) bestAudio = a;
-      }
-    }
+    // Best audio from this instance
+    const bestAudio = (d.audioStreams || [])
+      .filter(a => a.url)
+      .sort((a, b) => (b.bitrate||0) - (a.bitrate||0))[0] || null;
 
-    const sortedVideos = Object.values(videoMap).sort((a, b) => (b.height || 0) - (a.height || 0));
-    const meta = valid[0];
+    const sortedVideos = (d.videoStreams || [])
+      .filter(v => v.url && v.height)
+      .sort((a, b) => (b.height||0) - (a.height||0));
 
     const vStreams = sortedVideos.map(v => {
       const h = v.height;
@@ -88,7 +157,7 @@ function App() {
         filesize: v.contentLength ? parseInt(v.contentLength) : null,
         has_audio: false,
         direct_url: v.url,
-        audio_url: bestAudio ? bestAudio.url : null  // ⚡ pre-stored for instant download
+        audio_url: bestAudio ? bestAudio.url : null
       };
     });
 
@@ -100,11 +169,11 @@ function App() {
       direct_url: bestAudio.url
     }] : [];
 
-    const dur = meta.duration || 0;
+    const dur = d.duration || 0;
     return {
-      title: meta.title,
-      thumbnail: meta.thumbnailUrl,
-      duration: `${Math.floor(dur / 60).toString().padStart(2,'0')}:${(dur % 60).toString().padStart(2,'0')}`,
+      title: d.title,
+      thumbnail: d.thumbnailUrl,
+      duration: `${Math.floor(dur/60).toString().padStart(2,'0')}:${(dur%60).toString().padStart(2,'0')}`,
       source: 'YouTube',
       url: videoUrl,
       videoFormats: vStreams.length > 0 ? vStreams : null,
@@ -113,45 +182,48 @@ function App() {
   };
 
 
+
   const handleFetch = async (targetUrl) => {
     setIsSearching(true);
     setResult(null);
     setErrorMsg(null);
     setSearchResults([]);
 
-    // Run both in parallel. Client result (Piped) has direct_url+audio_url — prefer it.
-    // Server result is faster fallback for non-YouTube or if Piped is down.
-    const serverFetchPromise = fetch('/api/info', {
+    const serverFetch = fetch('/api/info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: targetUrl })
-    }).then(r => r.json()).then(d => d.success ? d.data : Promise.reject());
+    }).then(r => r.json()).then(d => d.success ? d.data : null).catch(() => null);
 
-    const clientFetchPromise = fetchClientSideInfo(targetUrl).then(d => d || Promise.reject());
+    const clientFetch = fetchClientSideInfo(targetUrl).catch(() => null);
 
+    // ⚡ SHOW RESULT IMMEDIATELY (first to respond wins)
     try {
-      // Wait for BOTH — prefer client (has Piped URLs) if it succeeds
-      const [clientResult, serverResult] = await Promise.allSettled([clientFetchPromise, serverFetchPromise]);
+      const firstData = await Promise.any([
+        clientFetch.then(d => d || Promise.reject()),
+        serverFetch.then(d => d || Promise.reject())
+      ]);
+      setResult(firstData);
+      setIsSearching(false);
+      if (firstData.videoFormats?.[0]) setSelectedVideoFormat(firstData.videoFormats[0].format_id);
+      if (firstData.audioFormats?.[0]) setSelectedAudioFormat(firstData.audioFormats[0].format_id);
 
-      let fastData = null;
-      if (clientResult.status === 'fulfilled' && clientResult.value?.videoFormats?.length > 0) {
-        // Client has real Piped URLs with direct_url — use it
-        fastData = clientResult.value;
-      } else if (serverResult.status === 'fulfilled' && serverResult.value) {
-        // Use server result as fallback
-        fastData = serverResult.value;
-      } else {
-        throw new Error('All fetch methods failed');
+      // 🔄 BACKGROUND UPGRADE: If server won but lacks direct_url, silently upgrade with Piped data
+      if (!firstData.videoFormats?.[0]?.direct_url) {
+        clientFetch.then(clientData => {
+          if (clientData?.videoFormats?.[0]?.direct_url) {
+            setResult(clientData);
+            if (clientData.videoFormats?.[0]) setSelectedVideoFormat(clientData.videoFormats[0].format_id);
+            if (clientData.audioFormats?.[0]) setSelectedAudioFormat(clientData.audioFormats[0].format_id);
+          }
+        }).catch(() => {});
       }
-
-      setResult(fastData);
-      if (fastData.videoFormats?.length > 0) setSelectedVideoFormat(fastData.videoFormats[0].format_id);
-      if (fastData.audioFormats?.length > 0) setSelectedAudioFormat(fastData.audioFormats[0].format_id);
-    } catch (error) {
+    } catch {
       setErrorMsg('Failed to fetch video information. Make sure it is a valid, public URL.');
+      setIsSearching(false);
     }
-    setIsSearching(false);
   };
+
 
 
   const handleSearch = async (e) => {
@@ -223,14 +295,14 @@ function App() {
   };
 
   const handleDirectStreamDownload = async (type) => {
-    if (!result?.url) return;
+    if (!result?.url || isDownloading) return;
     const format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
     const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
     const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
     const title = result?.title || 'download';
     const targetHeight = selectedObj ? parseInt(selectedObj.format_id) || 0 : 0;
 
-    // ⚡ FAST PATH: Use pre-stored Piped URLs from info fetch (no extra requests)
+    // ⚡ INSTANT: Pre-stored Piped URLs from info fetch
     if (type === 'video' && selectedObj?.direct_url && selectedObj?.audio_url) {
       window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(selectedObj.direct_url)}&audio_url=${encodeURIComponent(selectedObj.audio_url)}&title=${encodeURIComponent(title)}`;
       return;
@@ -240,70 +312,70 @@ function App() {
       return;
     }
 
-    // 🔄 FALLBACK: Fresh Piped fetch (for YouTube when direct_url not stored or expired)
+    // 🔄 LIVE FETCH: Get fresh stream URLs (Piped + Invidious in parallel)
     const videoId = result.url?.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/)?.[1];
     if (videoId) {
-      const pipedInstances = [
-        `https://pipedapi.adminforge.de/streams/${videoId}`,
-        `https://pipedapi.drgns.space/streams/${videoId}`,
-        `https://pipedapi.lunar.icu/streams/${videoId}`,
-        `https://pipedapi.systemli.org/streams/${videoId}`,
-        `https://pipedapi.palvelu.org/streams/${videoId}`,
-        `https://pipedapi.mha.fi/streams/${videoId}`
-      ];
+      setIsDownloading(true);
       try {
-        const allRes = await Promise.allSettled(pipedInstances.map(async (inst) => {
-          const ctrl = new AbortController();
-          setTimeout(() => ctrl.abort(), 5000);
-          const r = await fetch(inst, { signal: ctrl.signal });
-          if (!r.ok) throw new Error('bad');
-          const d = await r.json();
-          if (!d?.videoStreams?.length) throw new Error('empty');
-          return d;
-        }));
-        const valid = allRes.filter(r => r.status === 'fulfilled').map(r => r.value);
-        if (valid.length > 0) {
-          const videoMap = {};
-          let bestAudio = null;
-          for (const d of valid) {
-            for (const v of (d.videoStreams || [])) {
-              if (!v.url || !v.height) continue;
-              if (!videoMap[v.height] || (v.bitrate || 0) > (videoMap[v.height].bitrate || 0)) videoMap[v.height] = v;
-            }
-            for (const a of (d.audioStreams || [])) {
-              if (!a.url) continue;
-              if (!bestAudio || (a.bitrate || 0) > (bestAudio.bitrate || 0)) bestAudio = a;
-            }
-          }
-          const sorted = Object.values(videoMap).sort((a, b) => (b.height || 0) - (a.height || 0));
-          let bestVideo = null;
-          if (type === 'video') {
-            bestVideo = (targetHeight > 0 ?
-              sorted.find(v => v.height === targetHeight) || sorted.find(v => v.height <= targetHeight) : null)
-              || sorted[0];
-          }
+        // Run Piped AND Invidious in parallel — whichever has best quality wins
+        const [pipedResult, invResult] = await Promise.allSettled([
+          fetchPipedStreams(videoId),
+          fetchInvidiousStreams(videoId)
+        ]);
 
-          if (type === 'audio' && bestAudio?.url) {
-            window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
-            return;
-          }
-          if (type === 'video' && bestVideo?.url && bestAudio?.url) {
-            window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestVideo.url)}&audio_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
-            return;
-          }
-          if (type === 'video' && bestVideo?.url) {
-            const a = document.createElement('a');
-            a.href = bestVideo.url; a.target = '_blank'; a.download = `${title}.mp4`;
-            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        // Collect all candidates from both sources
+        let allVideos = [];
+        let bestAudio = null;
+
+        if (pipedResult.status === 'fulfilled' && pipedResult.value) {
+          allVideos.push(...(pipedResult.value.sortedVideos || []).map(v => ({...v, source: 'piped'})));
+          if (!bestAudio) bestAudio = pipedResult.value.bestAudio;
+        }
+        if (invResult.status === 'fulfilled' && invResult.value) {
+          allVideos.push(...(invResult.value.sortedVideos || []).map(v => ({...v, source: 'invidious'})));
+          if (!bestAudio && invResult.value.bestAudio) bestAudio = invResult.value.bestAudio;
+        }
+
+        allVideos.sort((a, b) => (b.height||0) - (a.height||0));
+
+        if (type === 'audio' && bestAudio?.url) {
+          window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
+          setIsDownloading(false);
+          return;
+        }
+
+        if (type === 'video' && allVideos.length > 0) {
+          const bestVideo = (targetHeight > 0
+            ? allVideos.find(v => v.height === targetHeight) || allVideos.find(v => v.height <= targetHeight)
+            : null) || allVideos[0];
+
+          if (bestVideo?.url) {
+            if (bestAudio?.url) {
+              window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestVideo.url)}&audio_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
+            } else {
+              const a = document.createElement('a');
+              a.href = bestVideo.url; a.target = '_blank'; a.download = `${title}.mp4`;
+              document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            }
+            setIsDownloading(false);
             return;
           }
         }
-      } catch (e) { console.warn('[Piped fallback failed]', e.message); }
+
+        // All streaming sources failed — show clear error
+        alert('Could not fetch stream from any source (Piped + Invidious all unavailable). Please try again in a few minutes.');
+        setIsDownloading(false);
+        return;
+      } catch(e) {
+        console.error('[Download error]', e);
+        setIsDownloading(false);
+      }
     }
 
-    // ⛔ Last resort: server-side (non-YouTube only — yt-dlp works on non-YT sites)
+    // ⛔ Non-YouTube only (Twitter, Instagram, etc.) — yt-dlp works on these
     window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}`;
   };
+
 
 
   const copyDownloadLink = (type) => {
