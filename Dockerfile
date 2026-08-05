@@ -1,17 +1,15 @@
 # Base image with Node.js 20 and Python (needed for yt-dlp)
 FROM node:20-bullseye-slim
 
-# Skip heavy browser downloads during npm install, use system chromium
+# Skip heavy browser downloads during npm install
 ENV PUPPETEER_SKIP_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Install Python, FFmpeg, curl, unzip, and Chromium for bot bypass cookies
+# Install Python, FFmpeg, curl, and unzip (Lightweight < 100MB build)
 RUN apt-get update && apt-get install -y \
     python3 \
     ffmpeg \
     curl \
     unzip \
-    chromium \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
