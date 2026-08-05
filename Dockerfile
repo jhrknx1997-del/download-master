@@ -29,8 +29,8 @@ RUN npm run build
 RUN curl -L -o yt-dlp https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     && chmod a+rx yt-dlp
 
-# Expose port 5000
-EXPOSE 5000
+# Expose port 8080 (matches Railway Public Networking domain mapping)
+EXPOSE 8080
 
 # Start the Node.js server
 CMD ["node", "server.cjs"]
