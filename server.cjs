@@ -607,7 +607,9 @@ app.get('/api/stream-download', async (req, res) => {
           const matchedAudio = sortedAudios.length > 0 ? sortedAudios[0] : null;
 
           // ON-THE-FLY FFMPEG MULTIPLEXING ENGINE FOR HIGH-DEFINITION (1080p, 1440p 2K, 2160p 4K)
-          if (matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
+          const isQualityDegraded = targetHeight >= 720 && matchedVideo && matchedVideo.height && matchedVideo.height < Math.min(targetHeight - 100, 720);
+          
+          if (!isQualityDegraded && matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
             res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
             res.setHeader('Content-Type', 'video/mp4');
 
@@ -630,6 +632,8 @@ app.get('/api/stream-download', async (req, res) => {
             
             if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
             return;
+          } else if (isQualityDegraded) {
+            console.warn(`[Piped Degraded Stream]: Requested ${targetHeight}p but Piped only gave ${matchedVideo?.height}p. Proceeding to yt-dlp Android engine.`);
           }
 
           targetStream = matchedVideo ? (matchedVideo.url || matchedVideo) : null;
