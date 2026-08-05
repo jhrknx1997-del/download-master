@@ -548,17 +548,15 @@ app.get('/api/stream-download', async (req, res) => {
     return a;
   }
 
-  let targetFormat = 'best';
+  let targetFormat = 'b/best/18/22/bestvideo+bestaudio';
   if (isAudio) {
-    targetFormat = (format_id && format_id !== 'undefined' && !format_id.endsWith('p')) ? format_id : 'bestaudio/best';
-  } else {
-    if (!format_id || format_id === 'undefined' || format_id === 'best') {
-      targetFormat = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best';
-    } else if (format_id.endsWith('p')) {
+    targetFormat = 'bestaudio/best/140/m4a';
+  } else if (format_id && format_id !== 'undefined' && format_id !== 'best') {
+    if (format_id.endsWith('p')) {
       const height = parseInt(format_id) || 720;
-      targetFormat = `bestvideo[height<=${height}]+bestaudio/best[height<=${height}]/best`;
+      targetFormat = `b[height<=${height}]/best[height<=${height}]/b/best/18/22`;
     } else {
-      targetFormat = `${format_id}+bestaudio/best`;
+      targetFormat = `${format_id}/b/best/18/22`;
     }
   }
 
