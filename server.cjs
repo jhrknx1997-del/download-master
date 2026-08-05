@@ -53,34 +53,45 @@ async function fetchVideoInfoWithAutoRetry(url) {
   const cookiesPath = path.join(__dirname, 'cookies.txt');
   const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
 
-  // Attempt 1: Standard extraction (with cookies for YouTube)
+  // Attempt 1: Standard extraction (with cookies if available)
   let cookieArg = (fs.existsSync(cookiesPath) && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
-  let extractorArg = isYouTube ? '--extractor-args "youtube:player_client=default" ' : '';
-  let cmd1 = `"${YTDLP_PATH}" ${cookieArg}${extractorArg}--no-warnings --no-playlist --geo-bypass -j "${url}"`;
+  let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=ios,android,mweb" ' : '';
+  let cmd1 = `"${YTDLP_PATH}" ${cookieArg}${extractorArg1}--no-warnings --no-playlist --geo-bypass -j "${url}"`;
 
   try {
     const { stdout } = await execPromise(cmd1, { maxBuffer: 1024 * 1024 * 10 });
     return JSON.parse(stdout);
   } catch (err1) {
-    console.warn(`[Auto-Fix Retry 1] Standard fetch failed for ${url}. Trying clean mode...`);
+    console.warn(`[Auto-Fix Retry 1] Standard fetch failed for ${url}. Trying Android client...`);
   }
 
-  // Attempt 2: Clean fetch without cookies or extractor args
-  let cmd2 = `"${YTDLP_PATH}" --no-warnings --no-playlist --geo-bypass -j "${url}"`;
+  // Attempt 2: Android client bypass (Works best on Cloud Servers like Railway)
+  let extractorArg2 = isYouTube ? '--extractor-args "youtube:player_client=android" ' : '';
+  let cmd2 = `"${YTDLP_PATH}" ${extractorArg2}--no-warnings --no-playlist --geo-bypass -j "${url}"`;
   try {
     const { stdout } = await execPromise(cmd2, { maxBuffer: 1024 * 1024 * 10 });
     return JSON.parse(stdout);
   } catch (err2) {
-    console.warn(`[Auto-Fix Retry 2] Clean fetch failed. Trying Mobile User-Agent bypass...`);
+    console.warn(`[Auto-Fix Retry 2] Android fetch failed. Trying TV Embedded client...`);
   }
 
-  // Attempt 3: Mobile User-Agent + dump-single-json
-  let cmd3 = `"${YTDLP_PATH}" --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" --dump-single-json --no-warnings "${url}"`;
+  // Attempt 3: TV Embedded client bypass
+  let extractorArg3 = isYouTube ? '--extractor-args "youtube:player_client=tv_embedded" ' : '';
+  let cmd3 = `"${YTDLP_PATH}" ${extractorArg3}--no-warnings --no-playlist --geo-bypass -j "${url}"`;
   try {
     const { stdout } = await execPromise(cmd3, { maxBuffer: 1024 * 1024 * 10 });
     return JSON.parse(stdout);
   } catch (err3) {
-    console.error(`[Auto-Fix Failed] All 3 extraction attempts failed for ${url}:`, err3);
+    console.warn(`[Auto-Fix Retry 3] TV fetch failed. Trying Mobile User-Agent...`);
+  }
+
+  // Attempt 4: Mobile User-Agent + dump-single-json
+  let cmd4 = `"${YTDLP_PATH}" --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" --dump-single-json --no-warnings "${url}"`;
+  try {
+    const { stdout } = await execPromise(cmd4, { maxBuffer: 1024 * 1024 * 10 });
+    return JSON.parse(stdout);
+  } catch (err4) {
+    console.error(`[Auto-Fix Failed] All 4 extraction attempts failed for ${url}:`, err4);
     throw new Error('Unable to extract video information. Please verify the link is public and active.');
   }
 }
@@ -265,9 +276,9 @@ app.get('/api/stream-download', (req, res) => {
   res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
 
   let args = ['--geo-bypass'];
-  if (fs.existsSync(cookiesPath) && isYouTube) {
-    args.push('--cookies', cookiesPath);
-    args.push('--extractor-args', 'youtube:player_client=default');
+  if (isYouTube) {
+    if (fs.existsSync(cookiesPath)) args.push('--cookies', cookiesPath);
+    args.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
   }
 
   let targetFormat = 'best';
