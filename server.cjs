@@ -409,6 +409,63 @@ function spawnJobProcess(jobId) {
   });
 }
 
+async function getDirectMediaStreamUrl(youtubeUrl, isAudio) {
+  const videoIdMatch = youtubeUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  const videoId = videoIdMatch ? videoIdMatch[1] : null;
+  
+  if (videoId) {
+    const pipedInstances = [
+      `https://pipedapi.kavin.rocks/streams/${videoId}`,
+      `https://api.piped.video/streams/${videoId}`,
+      `https://pipedapi.adminforge.de/streams/${videoId}`,
+      `https://pipedapi.astral.sh/streams/${videoId}`
+    ];
+
+    for (const instanceUrl of pipedInstances) {
+      try {
+        const pRes = await fetch(instanceUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' } });
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
+            return pData.audioStreams[0].url;
+          }
+          if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
+            const combined = pData.videoStreams.find(v => !v.videoOnly && v.url);
+            if (combined) return combined.url;
+            if (pData.videoStreams[0].url) return pData.videoStreams[0].url;
+          }
+        }
+      } catch (e) {
+        console.warn(`[Cloud Proxy Fail] ${instanceUrl}:`, e.message);
+      }
+    }
+  }
+
+  // Cobalt API Fallback
+  try {
+    const cobaltRes = await fetch('https://api.cobalt.tools/api/json', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      },
+      body: JSON.stringify({
+        url: youtubeUrl,
+        isAudioOnly: isAudio
+      })
+    });
+    if (cobaltRes.ok) {
+      const cobaltData = await cobaltRes.json();
+      if (cobaltData.url) return cobaltData.url;
+    }
+  } catch (e) {
+    console.warn('[Cobalt API Fail]:', e.message);
+  }
+
+  return null;
+}
+
 // Instant Direct Download Stream Endpoint (0-Byte Failure Proof Temp-Buffer Stream Engine)
 app.get('/api/stream-download', async (req, res) => {
   const { url, type, format_id, title, direct_url } = req.query;
@@ -419,23 +476,35 @@ app.get('/api/stream-download', async (req, res) => {
   const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
   const fileName = `${cleanTitle}.${ext}`;
 
-  // If direct CDN stream URL (like googlevideo or piped) is provided, stream it directly
+  // If direct CDN stream URL (like googlevideo or piped) is provided, stream it directly if valid
   if (direct_url && direct_url.startsWith('http') && (direct_url.includes('googlevideo.com') || direct_url.includes('piped') || direct_url.includes('cdn'))) {
     try {
       const httpModule = direct_url.startsWith('https') ? require('https') : require('http');
-      const cdnReq = httpModule.get(direct_url, (cdnRes) => {
-        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-          return res.redirect(cdnRes.headers.location);
-        }
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-        if (cdnRes.headers['content-length']) {
-          res.setHeader('Content-Length', cdnRes.headers['content-length']);
-        }
-        cdnRes.pipe(res);
+      const pipedOk = await new Promise((resolve) => {
+        const cdnReq = httpModule.get(direct_url, (cdnRes) => {
+          if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+            res.redirect(cdnRes.headers.location);
+            return resolve(true);
+          }
+          if (cdnRes.statusCode === 200) {
+            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+            res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+            if (cdnRes.headers['content-length']) {
+              res.setHeader('Content-Length', cdnRes.headers['content-length']);
+            }
+            cdnRes.pipe(res);
+            return resolve(true);
+          }
+          console.warn(`[CDN Stream Non-200 Status]: ${cdnRes.statusCode}, falling back to temp file buffer...`);
+          cdnReq.destroy();
+          resolve(false);
+        });
+        cdnReq.on('error', (err) => {
+          console.warn('[CDN Stream Error]:', err.message);
+          resolve(false);
+        });
       });
-      cdnReq.on('error', (e) => console.error('[CDN Stream Error]:', e.message));
-      return;
+      if (pipedOk) return;
     } catch (e) {
       console.warn('Direct CDN pipe error, falling back to temp-file download:', e.message);
     }
@@ -496,7 +565,28 @@ app.get('/api/stream-download', async (req, res) => {
       }
     }
   } catch (err) {
-    console.error('Temp File Download Error:', err.message);
+    console.warn('Local yt-dlp failed on cloud datacenter IP, activating Cloud Proxy Engine:', err.message);
+    try {
+      const cloudMediaUrl = await getDirectMediaStreamUrl(targetUrl, isAudio);
+      if (cloudMediaUrl) {
+        console.log('Cloud Proxy Stream URL acquired! Streaming directly to client...');
+        const httpModule = cloudMediaUrl.startsWith('https') ? require('https') : require('http');
+        httpModule.get(cloudMediaUrl, (cdnRes) => {
+          if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+            return res.redirect(cdnRes.headers.location);
+          }
+          res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+          res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+          if (cdnRes.headers['content-length']) {
+            res.setHeader('Content-Length', cdnRes.headers['content-length']);
+          }
+          cdnRes.pipe(res);
+        });
+        return;
+      }
+    } catch (cloudErr) {
+      console.error('Cloud Proxy Engine Error:', cloudErr.message);
+    }
     if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
   }
 
