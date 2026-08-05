@@ -526,14 +526,14 @@ app.get('/api/stream-download', async (req, res) => {
   const targetUrl = (url && url.startsWith('http')) ? url : direct_url;
   const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
-  function buildYtdlpArgs(fmt, useFfmpeg) {
+  function buildYtdlpArgs(fmt, useFfmpeg, clientType = 'ios') {
     let a = ['--no-playlist', '--geo-bypass', '--force-ipv4'];
-    a.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+    a.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1');
     if (isYouTube) {
       if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
         a.push('--cookies', cookiesPath);
       }
-      a.push('--extractor-args', 'youtube:player_client=android');
+      a.push('--extractor-args', `youtube:player_client=${clientType}`);
     }
     if (useFfmpeg && process.platform === 'win32' && ffmpegPath && fs.existsSync(ffmpegPath)) {
       a.push('--ffmpeg-location', ffmpegPath);
@@ -560,36 +560,51 @@ app.get('/api/stream-download', async (req, res) => {
   let streamSuccess = false;
   let lastError = '';
 
-  // Attempt 1: Fast direct download with 10-minute timeout
+  // Attempt 1: iOS client player (bypasses YouTube datacenter bot block)
   try {
-    const args1 = buildYtdlpArgs(targetFormat, true);
-    console.log(`Starting Temp-Buffer Download (Attempt 1): yt-dlp ${args1.join(' ')}`);
+    const args1 = buildYtdlpArgs(targetFormat, true, 'ios');
+    console.log(`Starting Temp-Buffer Download (Attempt 1 iOS): yt-dlp ${args1.join(' ')}`);
     await execFilePromise(YTDLP_PATH, args1, { timeout: 600000 });
     if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
       streamSuccess = true;
     }
   } catch (err1) {
     lastError = err1.message;
-    console.warn('[Stream Attempt 1 Fail]:', err1.message);
+    console.warn('[Stream Attempt 1 iOS Fail]:', err1.message);
   }
 
-  // Attempt 2: Fallback to single pre-merged combined format (-f "18/22/b/best") without requiring FFmpeg
+  // Attempt 2: TV Embedded client player
   if (!streamSuccess) {
     try {
-      const simpleFormat = isAudio ? 'bestaudio/140/m4a/best' : '18/22/b/best';
-      const args2 = buildYtdlpArgs(simpleFormat, false);
-      console.log(`Starting Temp-Buffer Download (Attempt 2): yt-dlp ${args2.join(' ')}`);
+      const args2 = buildYtdlpArgs('18/22/b/best', false, 'tv_embedded');
+      console.log(`Starting Temp-Buffer Download (Attempt 2 TV): yt-dlp ${args2.join(' ')}`);
       await execFilePromise(YTDLP_PATH, args2, { timeout: 600000 });
       if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
         streamSuccess = true;
       }
     } catch (err2) {
       lastError = err2.message;
-      console.warn('[Stream Attempt 2 Fail]:', err2.message);
+      console.warn('[Stream Attempt 2 TV Fail]:', err2.message);
     }
   }
 
-  // If Attempt 1 or 2 succeeded, stream the local temp file to client
+  // Attempt 3: Mobile Web client player
+  if (!streamSuccess) {
+    try {
+      const simpleFormat = isAudio ? 'bestaudio/140/m4a/best' : '18/22/b/best';
+      const args3 = buildYtdlpArgs(simpleFormat, false, 'mweb');
+      console.log(`Starting Temp-Buffer Download (Attempt 3 MWeb): yt-dlp ${args3.join(' ')}`);
+      await execFilePromise(YTDLP_PATH, args3, { timeout: 600000 });
+      if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
+        streamSuccess = true;
+      }
+    } catch (err3) {
+      lastError = err3.message;
+      console.warn('[Stream Attempt 3 MWeb Fail]:', err3.message);
+    }
+  }
+
+  // If local execution succeeded, stream file buffer to client
   if (streamSuccess && fs.existsSync(tempFile)) {
     const stat = fs.statSync(tempFile);
     if (stat.size > 0) {
@@ -609,29 +624,29 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // Attempt 3: Cloud Proxy Stream Engine
+  // Attempt 4: Multi-region Public Cloud Proxy Redirect Fallback
   try {
     const cloudMediaUrl = await getDirectMediaStreamUrl(targetUrl, isAudio);
     if (cloudMediaUrl && cloudMediaUrl.startsWith('http')) {
-      console.log('[Cloud Proxy Stream acquired]: Streaming directly to client...');
-      const httpModule = cloudMediaUrl.startsWith('https') ? require('https') : require('http');
-      httpModule.get(cloudMediaUrl, (cdnRes) => {
-        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-          return res.redirect(cdnRes.headers.location);
-        }
-        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-        if (cdnRes.headers['content-length']) {
-          res.setHeader('Content-Length', cdnRes.headers['content-length']);
-        }
-        cdnRes.pipe(res);
-      });
+      console.log('[Cloud Proxy Stream acquired]: Redirecting client...');
       if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-      return;
+      return res.redirect(cloudMediaUrl);
     }
   } catch (cloudErr) {
     console.error('Cloud Proxy Engine Error:', cloudErr.message);
     lastError += ` | CloudErr: ${cloudErr.message}`;
+  }
+
+  // Attempt 5: Invidious / Piped direct video stream redirect
+  const vMatch = targetUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  if (vMatch) {
+    const videoId = vMatch[1];
+    const directFallbackUrl = isAudio 
+      ? `https://pipedapi.kavin.rocks/streams/${videoId}` 
+      : `https://invidious.nerdvpn.de/latest_version?id=${videoId}&itag=18`;
+    console.log(`[Final Fallback Redirect]: Redirecting to public stream...`);
+    if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+    return res.redirect(directFallbackUrl);
   }
 
   if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
