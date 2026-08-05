@@ -537,7 +537,7 @@ app.get('/api/stream-download', async (req, res) => {
       if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
         a.push('--cookies', cookiesPath);
       }
-      a.push('--extractor-args', 'youtube:player_client=ios,android,mweb');
+      a.push('--extractor-args', 'youtube:player_client=android');
     }
     if (useFfmpeg && ffmpegPath && fs.existsSync(ffmpegPath)) {
       a.push('--ffmpeg-location', ffmpegPath);
