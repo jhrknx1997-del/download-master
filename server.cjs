@@ -29,6 +29,9 @@ app.get('/api/health', (req, res) => {
 });
 
 
+// Define dist path
+const distPath = path.join(__dirname, 'dist');
+
 // Serve JS/CSS assets with long cache (content-hashed filenames)
 app.use('/assets', express.static(path.join(distPath, 'assets'), { maxAge: '1y', immutable: true }));
 
@@ -40,6 +43,7 @@ app.get('/', (req, res) => {
   res.setHeader('Expires', '0');
   res.sendFile(path.join(distPath, 'index.html'));
 });
+
 
 
 const YTDLP_PATH = process.platform === 'win32' 
