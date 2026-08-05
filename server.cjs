@@ -72,20 +72,34 @@ async function fetchYouTubeOembedFallback(url) {
 
   let title = 'YouTube Media Video';
   let thumbnail = videoId ? `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg` : 'https://images.unsplash.com/photo-1611162617213-7d7a39e9b1d7?w=500';
+  let duration = 0;
 
-  try {
-    const oembedRes = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+  if (videoId) {
+    try {
+      const searchRes = await yts({ videoId });
+      if (searchRes) {
+        title = searchRes.title || title;
+        thumbnail = searchRes.thumbnail || thumbnail;
+        duration = searchRes.seconds || 0;
       }
-    });
-    if (oembedRes.ok) {
-      const oembedData = await oembedRes.json();
-      title = oembedData.title || title;
-      thumbnail = oembedData.thumbnail_url || thumbnail;
+    } catch (e) {
+      console.warn('[yts Metadata Search Fail]:', e.message);
     }
-  } catch (e) {
-    console.warn('[oEmbed Fallback] Warning:', e.message);
+  }
+
+  if (title === 'YouTube Media Video') {
+    try {
+      const oembedRes = await fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        }
+      });
+      if (oembedRes.ok) {
+        const oembedData = await oembedRes.json();
+        title = oembedData.title || title;
+        thumbnail = oembedData.thumbnail_url || thumbnail;
+      }
+    } catch (e) {}
   }
 
   let videoFormats = [];
@@ -94,7 +108,8 @@ async function fetchYouTubeOembedFallback(url) {
   const pipedInstances = [
     `https://pipedapi.kavin.rocks/streams/${videoId}`,
     `https://api.piped.video/streams/${videoId}`,
-    `https://pipedapi.adminforge.de/streams/${videoId}`
+    `https://pipedapi.adminforge.de/streams/${videoId}`,
+    `https://pipedapi.astral.sh/streams/${videoId}`
   ];
 
   if (videoId) {
@@ -134,40 +149,31 @@ async function fetchYouTubeOembedFallback(url) {
           }
           if (videoFormats.length > 0) break;
         }
-      } catch (e) {
-        console.warn(`[Piped Instance Fail] ${instanceUrl}:`, e.message);
-      }
+      } catch (e) {}
     }
   }
 
   if (videoFormats.length === 0) {
-    videoFormats.push({
-      format_id: 'best',
-      ext: 'mp4',
-      quality: '720p HD',
-      resolution: '1280x720',
-      filesize: null,
-      has_audio: true,
-      direct_url: targetUrl
-    });
+    videoFormats = [
+      { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: null, has_audio: true },
+      { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: null, has_audio: true },
+      { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: null, has_audio: true },
+      { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: null, has_audio: true }
+    ];
   }
 
   if (audioFormats.length === 0) {
-    audioFormats.push({
-      format_id: 'bestaudio/best',
-      ext: 'mp3',
-      quality: '320kbps MP3 Audio',
-      abr: 320,
-      filesize: null,
-      direct_url: targetUrl
-    });
+    audioFormats = [
+      { format_id: 'bestaudio/best', ext: 'mp3', quality: '320kbps MP3 Audio', abr: 320, filesize: null },
+      { format_id: '128kbps', ext: 'mp3', quality: '128kbps MP3 Audio', abr: 128, filesize: null }
+    ];
   }
 
   return {
     id: videoId || 'media',
     title: title,
     thumbnail: thumbnail,
-    duration: 0,
+    duration: duration,
     webpage_url: targetUrl,
     url: targetUrl,
     videoFormats: videoFormats,
@@ -186,8 +192,8 @@ async function fetchVideoInfoWithAutoRetry(url) {
     : path.join(__dirname, 'yt-dlp');
 
   if (fs.existsSync(ytdlpBin)) {
-    // Attempt 1: Standard extraction (with cookies if available)
-    let cookieArg = (fs.existsSync(cookiesPath) && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
+    // Attempt 1: Standard extraction (with cookies if valid size > 100 bytes)
+    let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100 && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
     let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=ios,android,mweb" ' : '';
     let cmd1 = `"${ytdlpBin}" ${cookieArg}${extractorArg1}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
 
