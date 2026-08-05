@@ -1,5 +1,5 @@
-# Base image with Node.js 20 and Python (needed for yt-dlp)
-FROM node:20-bullseye-slim
+# Base image with Node.js 20 and Python 3.11+ (needed for yt-dlp)
+FROM node:20-bookworm-slim
 
 # Skip heavy browser downloads during npm install
 ENV PUPPETEER_SKIP_DOWNLOAD=true
