@@ -636,29 +636,74 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // Attempt 4: Multi-region Public Cloud Proxy Redirect Fallback
+  // Attempt 4: Snaptube/Vidmate Cloud Stream Engine (Direct Stream Pipe to Browser)
   try {
     const cloudMediaUrl = await getDirectMediaStreamUrl(targetUrl, isAudio);
     if (cloudMediaUrl && cloudMediaUrl.startsWith('http')) {
-      console.log('[Cloud Proxy Stream acquired]: Redirecting client...');
+      console.log('[Snaptube/Vidmate Engine]: Streaming directly to client...');
+      const httpModule = cloudMediaUrl.startsWith('https') ? require('https') : require('http');
+      httpModule.get(cloudMediaUrl, (cdnRes) => {
+        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+          return res.redirect(cdnRes.headers.location);
+        }
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+        res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+        if (cdnRes.headers['content-length']) {
+          res.setHeader('Content-Length', cdnRes.headers['content-length']);
+        }
+        cdnRes.pipe(res);
+      });
       if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-      return res.redirect(cloudMediaUrl);
+      return;
     }
   } catch (cloudErr) {
-    console.error('Cloud Proxy Engine Error:', cloudErr.message);
+    console.error('[Snaptube Engine Error]:', cloudErr.message);
     lastError += ` | CloudErr: ${cloudErr.message}`;
   }
 
-  // Attempt 5: Invidious / Piped direct video stream redirect
+  // Attempt 5: Multi-Instance Piped Media Stream Proxy (Direct 1-Step Download Attachment)
   const vMatch = targetUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   if (vMatch) {
     const videoId = vMatch[1];
-    const directFallbackUrl = isAudio 
-      ? `https://pipedapi.kavin.rocks/streams/${videoId}` 
-      : `https://invidious.nerdvpn.de/latest_version?id=${videoId}&itag=18`;
-    console.log(`[Final Fallback Redirect]: Redirecting to public stream...`);
-    if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-    return res.redirect(directFallbackUrl);
+    const pipedInstances = [
+      `https://pipedapi.kavin.rocks/streams/${videoId}`,
+      `https://api.piped.video/streams/${videoId}`,
+      `https://pipedapi.adminforge.de/streams/${videoId}`,
+      `https://pipedapi.astral.sh/streams/${videoId}`
+    ];
+    for (const pUrl of pipedInstances) {
+      try {
+        const pRes = await fetch(pUrl);
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          let targetStream = null;
+          if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
+            targetStream = pData.audioStreams[0].url;
+          } else if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
+            const targetHeight = parseInt(format_id) || 720;
+            const matched = pData.videoStreams.find(s => s.height === targetHeight && s.url) || pData.videoStreams.find(s => !s.videoOnly && s.url) || pData.videoStreams[0].url;
+            targetStream = matched ? (matched.url || matched) : null;
+          }
+          if (targetStream && targetStream.startsWith('http')) {
+            console.log('[Piped Proxy Stream acquired]: Piping to client...');
+            const httpMod = targetStream.startsWith('https') ? require('https') : require('http');
+            httpMod.get(targetStream, (cdnStream) => {
+              if (cdnStream.statusCode >= 300 && cdnStream.statusCode < 400 && cdnStream.headers.location) {
+                return res.redirect(cdnStream.headers.location);
+              }
+              res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+              res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+              if (cdnStream.headers['content-length']) {
+                res.setHeader('Content-Length', cdnStream.headers['content-length']);
+              }
+              cdnStream.pipe(res);
+            });
+            if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+            return;
+          }
+        }
+      } catch (e) {}
+    }
   }
 
   if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
