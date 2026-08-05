@@ -539,7 +539,7 @@ app.get('/api/stream-download', async (req, res) => {
   const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
   function buildYtdlpArgs(fmt, useFfmpeg, clientType = 'ios') {
-    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4'];
+    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4', '--remote-components', 'ejs:github'];
     a.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1');
     if (isYouTube) {
       if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
