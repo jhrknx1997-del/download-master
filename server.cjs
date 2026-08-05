@@ -652,6 +652,15 @@ setInterval(() => {
   });
 }, 15 * 60 * 1000);
 
+app.get('*', (req, res) => {
+  const indexHtmlPath = path.join(distPath, 'index.html');
+  if (fs.existsSync(indexHtmlPath)) {
+    res.sendFile(indexHtmlPath);
+  } else {
+    res.send('DownMaster Server Running OK');
+  }
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running on port ${PORT} on 0.0.0.0`);
   if (fs.existsSync(YTDLP_PATH)) {
