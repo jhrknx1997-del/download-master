@@ -110,16 +110,18 @@ async function fetchYouTubeOembedFallback(url) {
   let audioFormats = [];
 
   const pipedInstances = [
-    `https://pipedapi.kavin.rocks/streams/${videoId}`,
-    `https://api.piped.video/streams/${videoId}`,
     `https://pipedapi.adminforge.de/streams/${videoId}`,
-    `https://pipedapi.astral.sh/streams/${videoId}`
+    `https://pipedapi.drgns.space/streams/${videoId}`,
+    `https://pipedapi.lunar.icu/streams/${videoId}`,
+    `https://pipedapi.systemli.org/streams/${videoId}`,
+    `https://pipedapi.palvelu.org/streams/${videoId}`,
+    `https://pipedapi.mha.fi/streams/${videoId}`
   ];
 
   if (videoId) {
     for (const instanceUrl of pipedInstances) {
       try {
-        const pipedRes = await fetch(instanceUrl);
+        const pipedRes = await fetch(instanceUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
         if (pipedRes.ok) {
           const pipedData = await pipedRes.json();
           if (pipedData.videoStreams && pipedData.videoStreams.length > 0) {
@@ -441,10 +443,12 @@ async function getDirectMediaStreamUrl(youtubeUrl, isAudio) {
   
   if (videoId) {
     const pipedInstances = [
-      `https://pipedapi.kavin.rocks/streams/${videoId}`,
-      `https://api.piped.video/streams/${videoId}`,
       `https://pipedapi.adminforge.de/streams/${videoId}`,
-      `https://pipedapi.astral.sh/streams/${videoId}`
+      `https://pipedapi.drgns.space/streams/${videoId}`,
+      `https://pipedapi.lunar.icu/streams/${videoId}`,
+      `https://pipedapi.systemli.org/streams/${videoId}`,
+      `https://pipedapi.palvelu.org/streams/${videoId}`,
+      `https://pipedapi.mha.fi/streams/${videoId}`
     ];
 
     for (const instanceUrl of pipedInstances) {
@@ -676,10 +680,12 @@ app.get('/api/stream-download', async (req, res) => {
   if (vMatch) {
     const videoId = vMatch[1];
     const pipedInstances = [
-      `https://pipedapi.kavin.rocks/streams/${videoId}`,
-      `https://api.piped.video/streams/${videoId}`,
       `https://pipedapi.adminforge.de/streams/${videoId}`,
-      `https://pipedapi.astral.sh/streams/${videoId}`
+      `https://pipedapi.drgns.space/streams/${videoId}`,
+      `https://pipedapi.lunar.icu/streams/${videoId}`,
+      `https://pipedapi.systemli.org/streams/${videoId}`,
+      `https://pipedapi.palvelu.org/streams/${videoId}`,
+      `https://pipedapi.mha.fi/streams/${videoId}`
     ];
     for (const pUrl of pipedInstances) {
       try {
