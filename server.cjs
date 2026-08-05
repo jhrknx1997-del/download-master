@@ -109,53 +109,87 @@ async function fetchYouTubeOembedFallback(url) {
   let videoFormats = [];
   let audioFormats = [];
 
-  const pipedInstances = [
-    `https://pipedapi.adminforge.de/streams/${videoId}`,
-    `https://pipedapi.drgns.space/streams/${videoId}`,
-    `https://pipedapi.lunar.icu/streams/${videoId}`,
-    `https://pipedapi.systemli.org/streams/${videoId}`,
-    `https://pipedapi.palvelu.org/streams/${videoId}`,
-    `https://pipedapi.mha.fi/streams/${videoId}`
-  ];
-
   if (videoId) {
-    for (const instanceUrl of pipedInstances) {
-      try {
-        const pipedRes = await fetch(instanceUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        if (pipedRes.ok) {
-          const pipedData = await pipedRes.json();
-          if (pipedData.videoStreams && pipedData.videoStreams.length > 0) {
-            pipedData.videoStreams.forEach(s => {
-              if (s.url) {
-                const qLabel = (s.quality || '720p').split(' ')[0];
-                videoFormats.push({
-                  format_id: qLabel,
-                  ext: 'mp4',
-                  quality: s.quality || `${qLabel} HD`,
-                  resolution: s.quality || '1280x720',
-                  filesize: s.contentLength || null,
-                  has_audio: !s.videoOnly
-                });
-              }
-            });
+    const pipedInstances = [
+      `https://pipedapi.adminforge.de/streams/${videoId}`,
+      `https://pipedapi.drgns.space/streams/${videoId}`,
+      `https://pipedapi.lunar.icu/streams/${videoId}`,
+      `https://pipedapi.systemli.org/streams/${videoId}`,
+      `https://pipedapi.palvelu.org/streams/${videoId}`,
+      `https://pipedapi.mha.fi/streams/${videoId}`
+    ];
+
+    // Fetch ALL instances IN PARALLEL — takes only as long as the fastest responder
+    const allResults = await Promise.allSettled(pipedInstances.map(async (instanceUrl) => {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 3500);
+      const r = await fetch(instanceUrl, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
+      if (!r.ok) throw new Error('bad');
+      const d = await r.json();
+      if (!d?.videoStreams?.length) throw new Error('empty');
+      return d;
+    }));
+
+    const valid = allResults.filter(r => r.status === 'fulfilled').map(r => r.value);
+
+    if (valid.length > 0) {
+      // Collect BEST stream per height & best audio across ALL instances
+      const videoMap = {};
+      let bestAudio = null;
+
+      for (const d of valid) {
+        for (const v of (d.videoStreams || [])) {
+          if (!v.url || !v.height) continue;
+          if (!videoMap[v.height] || (v.bitrate || 0) > (videoMap[v.height].bitrate || 0)) {
+            videoMap[v.height] = v;
           }
-          if (pipedData.audioStreams && pipedData.audioStreams.length > 0) {
-            pipedData.audioStreams.forEach(a => {
-              if (a.url) {
-                audioFormats.push({
-                  format_id: 'piped_audio_' + (a.bitrate || 128),
-                  ext: 'mp3',
-                  quality: `${Math.round((a.bitrate || 128000) / 1000)}kbps MP3 Audio`,
-                  abr: Math.round((a.bitrate || 128000) / 1000),
-                  filesize: a.contentLength || null,
-                  direct_url: a.url
-                });
-              }
-            });
-          }
-          if (videoFormats.length > 0) break;
         }
-      } catch (e) {}
+        for (const a of (d.audioStreams || [])) {
+          if (!a.url) continue;
+          if (!bestAudio || (a.bitrate || 0) > (bestAudio.bitrate || 0)) bestAudio = a;
+        }
+      }
+
+      const sortedVideos = Object.values(videoMap).sort((a, b) => (b.height || 0) - (a.height || 0));
+
+      videoFormats = sortedVideos.map(v => {
+        const h = v.height;
+        const qLabel = h >= 2160 ? '2160p 4K Ultra HD'
+          : h >= 1440 ? '1440p 2K QHD'
+          : h >= 1080 ? '1080p Full HD'
+          : h >= 720  ? '720p HD'
+          : h >= 480  ? '480p SD'
+          : h >= 360  ? '360p SD'
+          : `${h}p`;
+        return {
+          format_id: `${h}p`,
+          ext: 'mp4',
+          quality: qLabel,
+          height: h,
+          resolution: `${v.width || ''}x${h}`,
+          filesize: v.contentLength ? parseInt(v.contentLength) : null,
+          has_audio: false,
+          direct_url: v.url,
+          audio_url: bestAudio ? bestAudio.url : null  // Pre-fetched audio URL — instant download!
+        };
+      });
+
+      if (bestAudio) {
+        audioFormats = [{
+          format_id: 'piped_audio',
+          ext: 'mp3',
+          quality: `${Math.round((bestAudio.bitrate || 128000) / 1000)}kbps MP3 Audio`,
+          abr: Math.round((bestAudio.bitrate || 128000) / 1000),
+          filesize: bestAudio.contentLength ? parseInt(bestAudio.contentLength) : null,
+          direct_url: bestAudio.url
+        }];
+      }
+
+      // Metadata from first valid result
+      const meta = valid[0];
+      if (meta.title && title === 'YouTube Media Video') title = meta.title;
+      if (meta.thumbnailUrl) thumbnail = meta.thumbnailUrl;
+      if (meta.duration && !duration) duration = meta.duration;
     }
   }
 
@@ -164,7 +198,7 @@ async function fetchYouTubeOembedFallback(url) {
     videoFormats = [
       { format_id: '2160p', ext: 'mp4', quality: '2160p 4K Ultra HD', resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
       { format_id: '1440p', ext: 'mp4', quality: '1440p 2K QHD', resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
-      { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
+      { format_id: '1080p', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
       { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
       { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
       { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
@@ -183,15 +217,16 @@ async function fetchYouTubeOembedFallback(url) {
 
   return {
     id: videoId || 'media',
-    title: title,
-    thumbnail: thumbnail,
-    duration: duration,
+    title,
+    thumbnail,
+    duration,
     webpage_url: targetUrl,
     url: targetUrl,
-    videoFormats: videoFormats,
-    audioFormats: audioFormats
+    videoFormats,
+    audioFormats
   };
 }
+
 
 async function fetchVideoInfoWithAutoRetry(url) {
   const cleanUrl = (url || '').trim();
