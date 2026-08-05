@@ -1,11 +1,15 @@
-# Base image with Node.js and Python (needed for yt-dlp)
-FROM node:18-bullseye-slim
+# Base image with Node.js 20 and Python (needed for yt-dlp)
+FROM node:20-bullseye-slim
 
-# Install Python, FFmpeg, and curl
+# Skip heavy browser downloads during npm install
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
+# Install Python, FFmpeg, curl, and unzip
 RUN apt-get update && apt-get install -y \
     python3 \
     ffmpeg \
     curl \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
