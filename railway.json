@@ -6,6 +6,7 @@
   "deploy": {
     "startCommand": "node server.cjs",
     "healthcheckPath": "/",
+    "healthcheckTimeout": 100,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10
   }

@@ -15,6 +15,10 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', version: '2026-v2-bulletproof' });
+});
+
 // Serve static frontend files
 const distPath = path.join(__dirname, 'dist');
 app.use(express.static(distPath));
