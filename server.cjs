@@ -279,13 +279,16 @@ app.post('/api/info', async (req, res) => {
     let videoFormats = data.videoFormats || (data.formats || [])
       .filter(f => f.vcodec !== 'none')
       .map(f => {
-        const height = f.height || (f.format_note ? parseInt(f.format_note) : 0);
+        let displayHeight = f.height || (f.format_note ? parseInt(f.format_note) : 0);
+        if (f.width && f.height && f.width < f.height) {
+          displayHeight = f.width; // For vertical Shorts, width (e.g. 360) is the actual quality level (360p)
+        }
         return {
           format_id: f.format_id,
           ext: f.ext || 'mp4',
           resolution: f.resolution || (f.height ? `${f.width || ''}x${f.height}` : 'Default'),
-          quality: f.height ? `${f.height}p` : (f.format_note || 'Standard Quality'),
-          height: height,
+          quality: displayHeight ? `${displayHeight}p` : (f.format_note || 'Standard Quality'),
+          height: displayHeight,
           filesize: f.filesize || f.filesize_approx,
           has_audio: f.acodec !== 'none',
           tbr: f.tbr,
