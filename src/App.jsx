@@ -25,6 +25,56 @@ function App() {
     document.body.removeChild(link);
   };
 
+  const fetchSinglePipedInstance = async (instUrl, videoUrl) => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 2500);
+    try {
+      const res = await fetch(instUrl, { signal: controller.signal });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.title) {
+          const vStreams = (data.videoStreams || []).map(v => {
+            const h = v.height || parseInt(v.quality) || 720;
+            let qLabel = `${h}p`;
+            if (h >= 2160) qLabel = '2160p 4K Ultra HD';
+            else if (h >= 1440) qLabel = '1440p 2K QHD';
+            else if (h >= 1080) qLabel = '1080p Full HD';
+            else if (h >= 720) qLabel = '720p HD';
+
+            return {
+              format_id: `piped_${h}p`,
+              ext: 'mp4',
+              quality: qLabel,
+              resolution: `${v.width || 1280}x${h}`,
+              filesize: v.contentLength || null,
+              direct_url: v.url
+            };
+          });
+
+          const aStreams = (data.audioStreams || []).map(a => ({
+            format_id: 'piped_audio',
+            ext: 'mp3',
+            quality: `${Math.round((a.bitrate || 128000) / 1000)}kbps MP3 Audio`,
+            filesize: a.contentLength || null,
+            direct_url: a.url
+          }));
+
+          return {
+            title: data.title,
+            thumbnail: data.thumbnailUrl,
+            duration: `${Math.floor((data.duration || 0) / 60)}:${((data.duration || 0) % 60).toString().padStart(2, '0')}`,
+            source: 'YouTube',
+            url: videoUrl,
+            videoFormats: vStreams.length > 0 ? vStreams : null,
+            audioFormats: aStreams.length > 0 ? aStreams : null
+          };
+        }
+      }
+    } catch (e) {}
+    throw new Error('Failed');
+  };
+
   const fetchClientSideInfo = async (videoUrl) => {
     const videoIdMatch = videoUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     if (!videoIdMatch) return null;
@@ -39,52 +89,11 @@ function App() {
       `https://pipedapi.mha.fi/streams/${videoId}`
     ];
 
-    for (const inst of pipedInstances) {
-      try {
-        const res = await fetch(inst);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.title) {
-            const vStreams = (data.videoStreams || []).map(v => {
-              const h = v.height || parseInt(v.quality) || 720;
-              let qLabel = `${h}p`;
-              if (h >= 2160) qLabel = '2160p 4K Ultra HD';
-              else if (h >= 1440) qLabel = '1440p 2K QHD';
-              else if (h >= 1080) qLabel = '1080p Full HD';
-              else if (h >= 720) qLabel = '720p HD';
-
-              return {
-                format_id: `piped_${h}p`,
-                ext: 'mp4',
-                quality: qLabel,
-                resolution: `${v.width || 1280}x${h}`,
-                filesize: v.contentLength || null,
-                direct_url: v.url
-              };
-            });
-
-            const aStreams = (data.audioStreams || []).map(a => ({
-              format_id: 'piped_audio',
-              ext: 'mp3',
-              quality: `${Math.round((a.bitrate || 128000) / 1000)}kbps MP3 Audio`,
-              filesize: a.contentLength || null,
-              direct_url: a.url
-            }));
-
-            return {
-              title: data.title,
-              thumbnail: data.thumbnailUrl,
-              duration: `${Math.floor((data.duration || 0) / 60)}:${((data.duration || 0) % 60).toString().padStart(2, '0')}`,
-              source: 'YouTube',
-              url: videoUrl,
-              videoFormats: vStreams.length > 0 ? vStreams : null,
-              audioFormats: aStreams.length > 0 ? aStreams : null
-            };
-          }
-        }
-      } catch (e) {}
+    try {
+      return await Promise.any(pipedInstances.map(inst => fetchSinglePipedInstance(inst, videoUrl)));
+    } catch (e) {
+      return null;
     }
-    return null;
   };
 
   const handleFetch = async (targetUrl) => {
@@ -93,43 +102,25 @@ function App() {
     setErrorMsg(null);
     setSearchResults([]);
 
-    // 1. Try Client-Side Browser Direct Fetching First (Snaptube/Vidmate Residential IP approach)
-    const clientData = await fetchClientSideInfo(targetUrl);
-    if (clientData) {
-      setResult(clientData);
-      if (clientData.videoFormats && clientData.videoFormats.length > 0) {
-        setSelectedVideoFormat(clientData.videoFormats[0].format_id);
-      }
-      if (clientData.audioFormats && clientData.audioFormats.length > 0) {
-        setSelectedAudioFormat(clientData.audioFormats[0].format_id);
-      }
-      setIsSearching(false);
-      return;
-    }
+    const serverFetchPromise = fetch('/api/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: targetUrl })
+    }).then(r => r.json()).then(resData => resData.success ? resData.data : Promise.reject());
 
-    // 2. Server Fallback
+    const clientFetchPromise = fetchClientSideInfo(targetUrl).then(data => data || Promise.reject());
+
     try {
-      const response = await fetch('/api/info', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: targetUrl })
-      });
-      
-      const resData = await response.json();
-      
-      if (resData.success) {
-        setResult(resData.data);
-        if (resData.data.videoFormats && resData.data.videoFormats.length > 0) {
-          setSelectedVideoFormat(resData.data.videoFormats[0].format_id);
-        }
-        if (resData.data.audioFormats && resData.data.audioFormats.length > 0) {
-          setSelectedAudioFormat(resData.data.audioFormats[0].format_id);
-        }
-      } else {
-        setErrorMsg(resData.error || 'Failed to fetch video information. Make sure it is a valid, public URL.');
+      const fastData = await Promise.any([clientFetchPromise, serverFetchPromise]);
+      setResult(fastData);
+      if (fastData.videoFormats && fastData.videoFormats.length > 0) {
+        setSelectedVideoFormat(fastData.videoFormats[0].format_id);
+      }
+      if (fastData.audioFormats && fastData.audioFormats.length > 0) {
+        setSelectedAudioFormat(fastData.audioFormats[0].format_id);
       }
     } catch (error) {
-      setErrorMsg('Error connecting to the server. Please try again.');
+      setErrorMsg('Failed to fetch video information. Make sure it is a valid, public URL.');
     }
     setIsSearching(false);
   };
