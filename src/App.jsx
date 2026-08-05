@@ -119,28 +119,40 @@ function App() {
     setErrorMsg(null);
     setSearchResults([]);
 
+    // Run both in parallel. Client result (Piped) has direct_url+audio_url — prefer it.
+    // Server result is faster fallback for non-YouTube or if Piped is down.
     const serverFetchPromise = fetch('/api/info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url: targetUrl })
-    }).then(r => r.json()).then(resData => resData.success ? resData.data : Promise.reject());
+    }).then(r => r.json()).then(d => d.success ? d.data : Promise.reject());
 
-    const clientFetchPromise = fetchClientSideInfo(targetUrl).then(data => data || Promise.reject());
+    const clientFetchPromise = fetchClientSideInfo(targetUrl).then(d => d || Promise.reject());
 
     try {
-      const fastData = await Promise.any([clientFetchPromise, serverFetchPromise]);
+      // Wait for BOTH — prefer client (has Piped URLs) if it succeeds
+      const [clientResult, serverResult] = await Promise.allSettled([clientFetchPromise, serverFetchPromise]);
+
+      let fastData = null;
+      if (clientResult.status === 'fulfilled' && clientResult.value?.videoFormats?.length > 0) {
+        // Client has real Piped URLs with direct_url — use it
+        fastData = clientResult.value;
+      } else if (serverResult.status === 'fulfilled' && serverResult.value) {
+        // Use server result as fallback
+        fastData = serverResult.value;
+      } else {
+        throw new Error('All fetch methods failed');
+      }
+
       setResult(fastData);
-      if (fastData.videoFormats && fastData.videoFormats.length > 0) {
-        setSelectedVideoFormat(fastData.videoFormats[0].format_id);
-      }
-      if (fastData.audioFormats && fastData.audioFormats.length > 0) {
-        setSelectedAudioFormat(fastData.audioFormats[0].format_id);
-      }
+      if (fastData.videoFormats?.length > 0) setSelectedVideoFormat(fastData.videoFormats[0].format_id);
+      if (fastData.audioFormats?.length > 0) setSelectedAudioFormat(fastData.audioFormats[0].format_id);
     } catch (error) {
       setErrorMsg('Failed to fetch video information. Make sure it is a valid, public URL.');
     }
     setIsSearching(false);
   };
+
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -210,39 +222,89 @@ function App() {
     }
   };
 
-  const handleDirectStreamDownload = (type) => {
+  const handleDirectStreamDownload = async (type) => {
     if (!result?.url) return;
     const format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
     const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
     const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
     const title = result?.title || 'download';
+    const targetHeight = selectedObj ? parseInt(selectedObj.format_id) || 0 : 0;
 
-    // ⚡ LIGHTNING FAST: URLs already fetched during info stage — zero extra requests!
-    if (type === 'video' && selectedObj?.direct_url) {
-      const videoUrl = selectedObj.direct_url;
-      const audioUrl = selectedObj.audio_url || null;
-
-      if (audioUrl) {
-        // Adaptive streams: server FFmpeg mux (video-only + audio-only → mp4)
-        window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(videoUrl)}&audio_url=${encodeURIComponent(audioUrl)}&title=${encodeURIComponent(title)}`;
-      } else {
-        // Combined stream: download directly
-        const a = document.createElement('a');
-        a.href = videoUrl; a.target = '_blank'; a.download = `${title}.mp4`;
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      }
+    // ⚡ FAST PATH: Use pre-stored Piped URLs from info fetch (no extra requests)
+    if (type === 'video' && selectedObj?.direct_url && selectedObj?.audio_url) {
+      window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(selectedObj.direct_url)}&audio_url=${encodeURIComponent(selectedObj.audio_url)}&title=${encodeURIComponent(title)}`;
       return;
     }
-
     if (type === 'audio' && selectedObj?.direct_url) {
-      // Audio stream through mux-stream (handles conversion)
       window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(selectedObj.direct_url)}&title=${encodeURIComponent(title)}`;
       return;
     }
 
-    // Server fallback (non-YouTube or Piped unavailable)
+    // 🔄 FALLBACK: Fresh Piped fetch (for YouTube when direct_url not stored or expired)
+    const videoId = result.url?.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/)?.[1];
+    if (videoId) {
+      const pipedInstances = [
+        `https://pipedapi.adminforge.de/streams/${videoId}`,
+        `https://pipedapi.drgns.space/streams/${videoId}`,
+        `https://pipedapi.lunar.icu/streams/${videoId}`,
+        `https://pipedapi.systemli.org/streams/${videoId}`,
+        `https://pipedapi.palvelu.org/streams/${videoId}`,
+        `https://pipedapi.mha.fi/streams/${videoId}`
+      ];
+      try {
+        const allRes = await Promise.allSettled(pipedInstances.map(async (inst) => {
+          const ctrl = new AbortController();
+          setTimeout(() => ctrl.abort(), 5000);
+          const r = await fetch(inst, { signal: ctrl.signal });
+          if (!r.ok) throw new Error('bad');
+          const d = await r.json();
+          if (!d?.videoStreams?.length) throw new Error('empty');
+          return d;
+        }));
+        const valid = allRes.filter(r => r.status === 'fulfilled').map(r => r.value);
+        if (valid.length > 0) {
+          const videoMap = {};
+          let bestAudio = null;
+          for (const d of valid) {
+            for (const v of (d.videoStreams || [])) {
+              if (!v.url || !v.height) continue;
+              if (!videoMap[v.height] || (v.bitrate || 0) > (videoMap[v.height].bitrate || 0)) videoMap[v.height] = v;
+            }
+            for (const a of (d.audioStreams || [])) {
+              if (!a.url) continue;
+              if (!bestAudio || (a.bitrate || 0) > (bestAudio.bitrate || 0)) bestAudio = a;
+            }
+          }
+          const sorted = Object.values(videoMap).sort((a, b) => (b.height || 0) - (a.height || 0));
+          let bestVideo = null;
+          if (type === 'video') {
+            bestVideo = (targetHeight > 0 ?
+              sorted.find(v => v.height === targetHeight) || sorted.find(v => v.height <= targetHeight) : null)
+              || sorted[0];
+          }
+
+          if (type === 'audio' && bestAudio?.url) {
+            window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
+            return;
+          }
+          if (type === 'video' && bestVideo?.url && bestAudio?.url) {
+            window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(bestVideo.url)}&audio_url=${encodeURIComponent(bestAudio.url)}&title=${encodeURIComponent(title)}`;
+            return;
+          }
+          if (type === 'video' && bestVideo?.url) {
+            const a = document.createElement('a');
+            a.href = bestVideo.url; a.target = '_blank'; a.download = `${title}.mp4`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            return;
+          }
+        }
+      } catch (e) { console.warn('[Piped fallback failed]', e.message); }
+    }
+
+    // ⛔ Last resort: server-side (non-YouTube only — yt-dlp works on non-YT sites)
     window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}`;
   };
+
 
   const copyDownloadLink = (type) => {
     if (!result?.url) return;
