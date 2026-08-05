@@ -538,9 +538,9 @@ app.get('/api/stream-download', async (req, res) => {
   const targetUrl = (url && url.startsWith('http')) ? url : direct_url;
   const isYouTube = targetUrl ? (targetUrl.includes('youtube.com') || targetUrl.includes('youtu.be')) : false;
 
-  function buildYtdlpArgs(fmt, useFfmpeg, clientType = 'tv_embedded,android_creator,ios') {
-    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4', '--js-runtimes', 'node'];
-    a.push('--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+  function buildYtdlpArgs(fmt, useFfmpeg, clientType = 'ios') {
+    let a = ['--no-playlist', '--geo-bypass', '--force-ipv4'];
+    a.push('--user-agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1');
     if (isYouTube) {
       if (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) {
         a.push('--cookies', cookiesPath);
@@ -572,7 +572,7 @@ app.get('/api/stream-download', async (req, res) => {
   let streamSuccess = false;
   let lastError = '';
 
-  // Attempt 1: iOS client player (bypasses YouTube datacenter bot block)
+  // Attempt 1: iOS client player (bypasses YouTube datacenter bot block & PO Tokens)
   try {
     const args1 = buildYtdlpArgs(targetFormat, true, 'ios');
     console.log(`Starting Temp-Buffer Download (Attempt 1 iOS): yt-dlp ${args1.join(' ')}`);
@@ -600,18 +600,18 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // Attempt 3: Android Embedded client player (No PO Token required)
+  // Attempt 3: Web Embedded client player
   if (!streamSuccess) {
     try {
-      const args3 = buildYtdlpArgs(targetFormat, false, 'android_embedded');
-      console.log(`Starting Temp-Buffer Download (Attempt 3 Android Embedded): yt-dlp ${args3.join(' ')}`);
+      const args3 = buildYtdlpArgs(targetFormat, false, 'web_embedded');
+      console.log(`Starting Temp-Buffer Download (Attempt 3 Web Embedded): yt-dlp ${args3.join(' ')}`);
       await execFilePromise(YTDLP_PATH, args3, { timeout: 600000 });
       if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
         streamSuccess = true;
       }
     } catch (err3) {
       lastError = err3.message;
-      console.warn('[Stream Attempt 3 Android Embedded Fail]:', err3.message);
+      console.warn('[Stream Attempt 3 Web Embedded Fail]:', err3.message);
     }
   }
 
