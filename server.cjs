@@ -561,6 +561,7 @@ app.get('/api/stream-download', async (req, res) => {
   }
 
   // Attempt 1: Parallel Multi-Instance Piped Media Stream Proxy + On-The-Fly FFmpeg Multiplexing
+  // Fetches ALL instances simultaneously, picks the BEST quality available — never rejects for quality.
   const vMatch = targetUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
   if (vMatch) {
     const videoId = vMatch[1];
@@ -575,9 +576,9 @@ app.get('/api/stream-download', async (req, res) => {
 
     const fetchPipedNode = async (pUrl) => {
       const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 2500);
+      const tid = setTimeout(() => controller.abort(), 4000);
       try {
-        const pRes = await fetch(pUrl, { signal: controller.signal });
+        const pRes = await fetch(pUrl, { signal: controller.signal, headers: { 'User-Agent': 'Mozilla/5.0' } });
         clearTimeout(tid);
         if (pRes.ok) {
           const data = await pRes.json();
@@ -588,89 +589,69 @@ app.get('/api/stream-download', async (req, res) => {
       } catch (e) {
         clearTimeout(tid);
       }
-      throw new Error('piped_fail');
+      return null;
     };
 
     try {
-      const pData = await Promise.any(pipedInstances.map(fetchPipedNode));
-      if (pData) {
-        let targetStream = null;
-        if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
-          const numMatch = (format_id || '').match(/(\d{3,4})/);
-          let targetHeight = numMatch ? parseInt(numMatch[1]) : 0;
-          
-          // Sort videoStreams in DESCENDING order (highest resolution first)
-          const sortedVideos = [...pData.videoStreams].sort((a, b) => (b.height || 0) - (a.height || 0));
+      // Fetch ALL instances in parallel and collect results
+      const allResults = await Promise.allSettled(pipedInstances.map(fetchPipedNode));
+      const validResults = allResults
+        .filter(r => r.status === 'fulfilled' && r.value !== null)
+        .map(r => r.value);
 
-          if (!targetHeight) {
-            targetHeight = sortedVideos[0].height || 1080;
+      console.log(`[Piped]: ${validResults.length}/${pipedInstances.length} instances responded`);
+
+      if (validResults.length > 0) {
+        const numMatch = (format_id || '').match(/(\d{3,4})/);
+        const targetHeight = numMatch ? parseInt(numMatch[1]) : 0;
+
+        // From all valid results, collect all video streams and pick the BEST matching quality
+        let bestVideo = null;
+        let bestAudio = null;
+
+        for (const pData of validResults) {
+          if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
+            const sortedVideos = [...pData.videoStreams]
+              .filter(s => s.url)
+              .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+            let candidate = null;
+            if (targetHeight > 0) {
+              // Best match at or below requested height
+              candidate = sortedVideos.find(s => s.height === targetHeight)
+                       || sortedVideos.find(s => s.height <= targetHeight)
+                       || sortedVideos[0];
+            } else {
+              candidate = sortedVideos[0]; // best available
+            }
+
+            // Prefer higher quality candidates across all instances
+            if (candidate && (!bestVideo || (candidate.height || 0) > (bestVideo.height || 0))) {
+              bestVideo = candidate;
+            }
           }
 
-          const matchedVideo = sortedVideos.find(s => s.height === targetHeight && s.url)
-                            || sortedVideos.find(s => (s.quality || '').includes(format_id) && s.url)
-                            || sortedVideos.find(s => s.height <= targetHeight && s.url)
-                            || sortedVideos[0];
-          
-          const sortedAudios = (pData.audioStreams && pData.audioStreams.length > 0) 
-            ? [...pData.audioStreams].sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0)) 
-            : [];
-          const matchedAudio = sortedAudios.length > 0 ? sortedAudios[0] : null;
-
-          // ON-THE-FLY FFMPEG MULTIPLEXING ENGINE FOR HIGH-DEFINITION (1080p, 1440p 2K, 2160p 4K)
-          // Reject Piped stream if the returned height is significantly lower than requested
-          const minAcceptableHeight = targetHeight > 0 ? Math.floor(targetHeight * 0.75) : 0;
-          const isQualityDegraded = targetHeight >= 480 && matchedVideo && matchedVideo.height &&
-                                    matchedVideo.height < minAcceptableHeight;
-          
-          if (!isQualityDegraded && matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
-            console.log(`[Piped FFmpeg Mux]: video=${matchedVideo.height}p audio=${matchedAudio.bitrate}bps`);
-            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-            res.setHeader('Content-Type', 'video/mp4');
-
-            const ffProc = spawn(ffmpegPath, [
-              '-y',
-              '-i', matchedVideo.url,
-              '-i', matchedAudio.url,
-              '-c:v', 'copy',
-              '-c:a', 'aac',
-              '-movflags', 'frag_keyframe+empty_moov',
-              '-f', 'mp4',
-              'pipe:1'
-            ]);
-
-            ffProc.stdout.pipe(res);
-
-            req.on('close', () => {
-              try { ffProc.kill(); } catch (e) {}
-            });
-            
-            if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-            return;
-          } else if (isQualityDegraded) {
-            console.warn(`[Piped Degraded]: Requested ${targetHeight}p but Piped only has ${matchedVideo?.height}p (min acceptable: ${minAcceptableHeight}p). Falling back to yt-dlp.`);
+          // Always take highest bitrate audio
+          if (pData.audioStreams && pData.audioStreams.length > 0) {
+            const sortedAudios = [...pData.audioStreams]
+              .filter(a => a.url)
+              .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+            if (sortedAudios.length > 0 && (!bestAudio || (sortedAudios[0].bitrate || 0) > (bestAudio.bitrate || 0))) {
+              bestAudio = sortedAudios[0];
+            }
           }
-
-          targetStream = matchedVideo ? (matchedVideo.url || matchedVideo) : null;
         }
 
-        if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
-          targetStream = pData.audioStreams[0].url;
-        }
-
-        if (targetStream && targetStream.startsWith('http')) {
+        // Audio-only download
+        if (isAudio && bestAudio && bestAudio.url) {
+          console.log(`[Piped Audio]: Streaming ${bestAudio.bitrate}bps audio`);
           const streamDone = await new Promise((resolve) => {
-            const httpMod = targetStream.startsWith('https') ? require('https') : require('http');
-            const cdnReq = httpMod.get(targetStream, (cdnRes) => {
-              if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-                res.redirect(cdnRes.headers.location);
-                return resolve(true);
-              }
+            const httpMod = bestAudio.url.startsWith('https') ? require('https') : require('http');
+            const cdnReq = httpMod.get(bestAudio.url, (cdnRes) => {
               if (cdnRes.statusCode === 200) {
                 res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-                res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-                if (cdnRes.headers['content-length']) {
-                  res.setHeader('Content-Length', cdnRes.headers['content-length']);
-                }
+                res.setHeader('Content-Type', 'audio/mpeg');
+                if (cdnRes.headers['content-length']) res.setHeader('Content-Length', cdnRes.headers['content-length']);
                 cdnRes.pipe(res);
                 return resolve(true);
               }
@@ -679,13 +660,58 @@ app.get('/api/stream-download', async (req, res) => {
             });
             cdnReq.on('error', () => resolve(false));
           });
-          if (streamDone) {
-            if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
-            return;
-          }
+          if (streamDone) { if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {}); return; }
+        }
+
+        // Video download: mux video+audio with FFmpeg (ALWAYS — no quality rejection)
+        if (!isAudio && bestVideo && bestAudio && bestVideo.url && bestAudio.url && ffmpegPath) {
+          console.log(`[Piped FFmpeg Mux]: video=${bestVideo.height}p (requested ${targetHeight || 'best'}p) audio=${bestAudio.bitrate}bps`);
+          res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+          res.setHeader('Content-Type', 'video/mp4');
+
+          const ffProc = spawn(ffmpegPath, [
+            '-y',
+            '-i', bestVideo.url,
+            '-i', bestAudio.url,
+            '-c:v', 'copy',
+            '-c:a', 'aac',
+            '-movflags', 'frag_keyframe+empty_moov',
+            '-f', 'mp4',
+            'pipe:1'
+          ]);
+
+          ffProc.stdout.pipe(res);
+          ffProc.stderr.on('data', d => console.log('[FFmpeg]:', d.toString().trim().substring(0, 100)));
+
+          req.on('close', () => { try { ffProc.kill(); } catch (e) {} });
+          if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+          return;
+        }
+
+        // Video-only stream (no audio stream from Piped) — pipe directly
+        if (!isAudio && bestVideo && bestVideo.url) {
+          console.log(`[Piped Direct Video]: ${bestVideo.height}p (no audio stream, piping directly)`);
+          const streamDone = await new Promise((resolve) => {
+            const httpMod = bestVideo.url.startsWith('https') ? require('https') : require('http');
+            const cdnReq = httpMod.get(bestVideo.url, (cdnRes) => {
+              if (cdnRes.statusCode === 200) {
+                res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+                res.setHeader('Content-Type', 'video/mp4');
+                if (cdnRes.headers['content-length']) res.setHeader('Content-Length', cdnRes.headers['content-length']);
+                cdnRes.pipe(res);
+                return resolve(true);
+              }
+              cdnReq.destroy();
+              resolve(false);
+            });
+            cdnReq.on('error', () => resolve(false));
+          });
+          if (streamDone) { if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {}); return; }
         }
       }
-    } catch (e) {}
+    } catch (e) {
+      console.warn('[Piped All Instances Failed]:', e.message);
+    }
   }
 
   let streamSuccess = false;
