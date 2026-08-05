@@ -160,9 +160,12 @@ async function fetchYouTubeOembedFallback(url) {
   if (videoFormats.length === 0) {
     videoFormats = [
       { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: null, has_audio: true },
+      { format_id: '1440p', ext: 'mp4', quality: '1440p 2K', resolution: '2560x1440', filesize: null, has_audio: true },
       { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: null, has_audio: true },
       { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: null, has_audio: true },
-      { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: null, has_audio: true }
+      { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: null, has_audio: true },
+      { format_id: '240p', ext: 'mp4', quality: '240p', resolution: '426x240', filesize: null, has_audio: true },
+      { format_id: '144p', ext: 'mp4', quality: '144p', resolution: '256x144', filesize: null, has_audio: true }
     ];
   }
 
@@ -192,16 +195,16 @@ async function fetchVideoInfoWithAutoRetry(url) {
   const isYouTube = cleanUrl.includes('youtube.com') || cleanUrl.includes('youtu.be');
 
   if (fs.existsSync(YTDLP_PATH) || process.platform !== 'win32') {
-    // Attempt 1: Standard extraction (with cookies if valid size > 100 bytes)
+    // Attempt 1: iOS client player (Returns full HD formats 1080p, 720p, 480p, 360p, 240p, 144p)
     let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100 && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
-    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=android" ' : '';
+    let extractorArg1 = isYouTube ? '--extractor-args "youtube:player_client=ios" ' : '';
     let cmd1 = `"${YTDLP_PATH}" ${cookieArg}${extractorArg1}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
 
     try {
       const { stdout } = await execPromise(cmd1, { maxBuffer: 1024 * 1024 * 10 });
       return JSON.parse(stdout);
     } catch (err1) {
-      console.warn(`[Auto-Fix Retry 1] Standard fetch failed:`, err1.message);
+      console.warn(`[Auto-Fix Retry 1] iOS fetch failed:`, err1.message);
     }
 
     // Attempt 2: Android client bypass (Works best on Cloud Servers like Railway)
@@ -225,7 +228,7 @@ async function fetchVideoInfoWithAutoRetry(url) {
     }
 
     // Attempt 4: Mobile User-Agent + dump-single-json
-    let cmd4 = `"${ytdlpBin}" --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" --dump-single-json --no-warnings "${cleanUrl}"`;
+    let cmd4 = `"${YTDLP_PATH}" --user-agent "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1" --dump-single-json --no-warnings "${cleanUrl}"`;
     try {
       const { stdout } = await execPromise(cmd4, { maxBuffer: 1024 * 1024 * 10 });
       return JSON.parse(stdout);
@@ -275,20 +278,24 @@ app.post('/api/info', async (req, res) => {
     // Extract all video formats (preserving pre-formatted fallbacks)
     let videoFormats = data.videoFormats || (data.formats || [])
       .filter(f => f.vcodec !== 'none')
-      .map(f => ({
-        format_id: f.format_id,
-        ext: f.ext,
-        resolution: f.resolution || (f.height ? `${f.width}x${f.height}` : 'Default'),
-        quality: f.format_note || (f.height ? `${f.height}p` : 'Standard Quality'),
-        filesize: f.filesize || f.filesize_approx,
-        has_audio: f.acodec !== 'none',
-        tbr: f.tbr,
-        direct_url: f.url
-      }))
+      .map(f => {
+        const height = f.height || (f.format_note ? parseInt(f.format_note) : 0);
+        return {
+          format_id: f.format_id,
+          ext: f.ext || 'mp4',
+          resolution: f.resolution || (f.height ? `${f.width || ''}x${f.height}` : 'Default'),
+          quality: f.height ? `${f.height}p` : (f.format_note || 'Standard Quality'),
+          height: height,
+          filesize: f.filesize || f.filesize_approx,
+          has_audio: f.acodec !== 'none',
+          tbr: f.tbr,
+          direct_url: f.url
+        };
+      })
       .filter((v, i, a) => a.findIndex(t => (t.quality === v.quality)) === i)
       .sort((a, b) => {
-         const resA = parseInt(a.quality) || a.tbr || 0;
-         const resB = parseInt(b.quality) || b.tbr || 0;
+         const resA = (a.height > 0) ? a.height : (parseInt(a.quality) || a.tbr || 0);
+         const resB = (b.height > 0) ? b.height : (parseInt(b.quality) || b.tbr || 0);
          return resB - resA;
       });
 
