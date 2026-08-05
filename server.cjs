@@ -697,9 +697,7 @@ app.get('/api/stream-download', async (req, res) => {
         if (pRes.ok) {
           const pData = await pRes.json();
           let targetStream = null;
-          if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
-            targetStream = pData.audioStreams[0].url;
-          } else if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
+          if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
             let targetHeight = 0;
             if (format_id) {
               if (format_id === 'best' || format_id === 'max' || format_id === 'highest') {
@@ -712,12 +710,46 @@ app.get('/api/stream-download', async (req, res) => {
               targetHeight = pData.videoStreams[0].height || 1080;
             }
 
-            const matched = pData.videoStreams.find(s => s.height === targetHeight && s.url)
-                         || pData.videoStreams.find(s => (s.quality || '').includes(format_id) && s.url)
-                         || pData.videoStreams.find(s => s.height >= targetHeight && s.url)
-                         || pData.videoStreams[0];
-            targetStream = matched ? (matched.url || matched) : null;
+            const matchedVideo = pData.videoStreams.find(s => s.height === targetHeight && s.url)
+                              || pData.videoStreams.find(s => (s.quality || '').includes(format_id) && s.url)
+                              || pData.videoStreams.find(s => s.height >= targetHeight && s.url)
+                              || pData.videoStreams[0];
+            
+            const matchedAudio = (pData.audioStreams && pData.audioStreams.length > 0) ? pData.audioStreams[0] : null;
+
+            // ON-THE-FLY FFMPEG MULTIPLEXING ENGINE FOR HIGH-DEFINITION (1080p, 1440p 2K, 2160p 4K)
+            if (matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
+              res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+              res.setHeader('Content-Type', 'video/mp4');
+
+              const ffProc = spawn(ffmpegPath, [
+                '-y',
+                '-i', matchedVideo.url,
+                '-i', matchedAudio.url,
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-movflags', 'frag_keyframe+empty_moov',
+                '-f', 'mp4',
+                'pipe:1'
+              ]);
+
+              ffProc.stdout.pipe(res);
+
+              req.on('close', () => {
+                try { ffProc.kill(); } catch (e) {}
+              });
+              
+              if (fs.existsSync(tempFile)) fs.unlink(tempFile, () => {});
+              return;
+            }
+
+            targetStream = matchedVideo ? (matchedVideo.url || matchedVideo) : null;
           }
+
+          if (isAudio && pData.audioStreams && pData.audioStreams.length > 0) {
+            targetStream = pData.audioStreams[0].url;
+          }
+
           if (targetStream && targetStream.startsWith('http')) {
             const streamDone = await new Promise((resolve) => {
               const httpMod = targetStream.startsWith('https') ? require('https') : require('http');
