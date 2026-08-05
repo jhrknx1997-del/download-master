@@ -129,7 +129,7 @@ function App() {
     let format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
     const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
     const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
-    const directUrlParam = selectedObj?.direct_url ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
+    const directUrlParam = (selectedObj?.direct_url && selectedObj?.format_id?.startsWith('piped')) ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
     const title = result?.title || 'download';
     window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}${directUrlParam}`;
   };
@@ -139,7 +139,7 @@ function App() {
     let format = type === 'video' ? selectedVideoFormat : selectedAudioFormat;
     const formatsList = type === 'video' ? (result.videoFormats || []) : (result.audioFormats || []);
     const selectedObj = formatsList.find(f => f.format_id === format) || formatsList[0];
-    const directUrlParam = selectedObj?.direct_url ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
+    const directUrlParam = (selectedObj?.direct_url && selectedObj?.format_id?.startsWith('piped')) ? `&direct_url=${encodeURIComponent(selectedObj.direct_url)}` : '';
     const title = result?.title || 'download';
     const directLink = `${window.location.origin}/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(format || '')}&title=${encodeURIComponent(title)}${directUrlParam}`;
     
