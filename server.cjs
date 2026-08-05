@@ -645,7 +645,7 @@ setInterval(() => {
   });
 }, 15 * 60 * 1000);
 
-app.get('*', (req, res) => {
+app.use((req, res) => {
   const indexHtmlPath = path.join(distPath, 'index.html');
   if (fs.existsSync(indexHtmlPath)) {
     res.sendFile(indexHtmlPath);
