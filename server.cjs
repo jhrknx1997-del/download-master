@@ -563,7 +563,7 @@ app.get('/api/stream-download', async (req, res) => {
   } else if (format_id && format_id !== 'undefined' && format_id !== 'best') {
     if (format_id.endsWith('p')) {
       const height = parseInt(format_id) || 720;
-      targetFormat = `bestvideo[height<=${height}]+bestaudio/bestvideo[height<=${height}][ext=mp4]+bestaudio/22/b/best`;
+      targetFormat = `b[height<=${height}]/best[height<=${height}]/bestvideo[height<=${height}]+bestaudio/bestvideo[height<=${height}][ext=mp4]+bestaudio/22/b/best`;
     } else {
       targetFormat = `${format_id}+bestaudio/bestvideo+bestaudio/22/b/best`;
     }
@@ -600,18 +600,18 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
-  // Attempt 3: Mobile Web client player
+  // Attempt 3: Android Embedded client player (No PO Token required)
   if (!streamSuccess) {
     try {
-      const args3 = buildYtdlpArgs(targetFormat, false, 'mweb');
-      console.log(`Starting Temp-Buffer Download (Attempt 3 MWeb): yt-dlp ${args3.join(' ')}`);
+      const args3 = buildYtdlpArgs(targetFormat, false, 'android_embedded');
+      console.log(`Starting Temp-Buffer Download (Attempt 3 Android Embedded): yt-dlp ${args3.join(' ')}`);
       await execFilePromise(YTDLP_PATH, args3, { timeout: 600000 });
       if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
         streamSuccess = true;
       }
     } catch (err3) {
       lastError = err3.message;
-      console.warn('[Stream Attempt 3 MWeb Fail]:', err3.message);
+      console.warn('[Stream Attempt 3 Android Embedded Fail]:', err3.message);
     }
   }
 
