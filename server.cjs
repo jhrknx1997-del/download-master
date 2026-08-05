@@ -127,14 +127,14 @@ async function fetchYouTubeOembedFallback(url) {
           if (pipedData.videoStreams && pipedData.videoStreams.length > 0) {
             pipedData.videoStreams.forEach(s => {
               if (s.url) {
+                const qLabel = (s.quality || '720p').split(' ')[0];
                 videoFormats.push({
-                  format_id: 'piped_' + (s.quality || '720p'),
+                  format_id: qLabel,
                   ext: 'mp4',
-                  quality: s.quality || '720p HD',
+                  quality: s.quality || `${qLabel} HD`,
                   resolution: s.quality || '1280x720',
                   filesize: s.contentLength || null,
-                  has_audio: !s.videoOnly,
-                  direct_url: s.url
+                  has_audio: !s.videoOnly
                 });
               }
             });
@@ -586,17 +586,25 @@ app.get('/api/stream-download', async (req, res) => {
       if (pData) {
         let targetStream = null;
         if (!isAudio && pData.videoStreams && pData.videoStreams.length > 0) {
-          let targetHeight = parseInt(format_id) || 0;
+          const numMatch = (format_id || '').match(/(\d{3,4})/);
+          let targetHeight = numMatch ? parseInt(numMatch[1]) : 0;
+          
+          // Sort videoStreams in DESCENDING order (highest resolution first)
+          const sortedVideos = [...pData.videoStreams].sort((a, b) => (b.height || 0) - (a.height || 0));
+
           if (!targetHeight) {
-            targetHeight = pData.videoStreams[0].height || 1080;
+            targetHeight = sortedVideos[0].height || 1080;
           }
 
-          const matchedVideo = pData.videoStreams.find(s => s.height === targetHeight && s.url)
-                            || pData.videoStreams.find(s => (s.quality || '').includes(format_id) && s.url)
-                            || pData.videoStreams.find(s => s.height <= targetHeight && s.url)
-                            || pData.videoStreams[0];
+          const matchedVideo = sortedVideos.find(s => s.height === targetHeight && s.url)
+                            || sortedVideos.find(s => (s.quality || '').includes(format_id) && s.url)
+                            || sortedVideos.find(s => s.height <= targetHeight && s.url)
+                            || sortedVideos[0];
           
-          const matchedAudio = (pData.audioStreams && pData.audioStreams.length > 0) ? pData.audioStreams[0] : null;
+          const sortedAudios = (pData.audioStreams && pData.audioStreams.length > 0) 
+            ? [...pData.audioStreams].sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0)) 
+            : [];
+          const matchedAudio = sortedAudios.length > 0 ? sortedAudios[0] : null;
 
           // ON-THE-FLY FFMPEG MULTIPLEXING ENGINE FOR HIGH-DEFINITION (1080p, 1440p 2K, 2160p 4K)
           if (matchedVideo && matchedAudio && matchedVideo.url && matchedAudio.url && ffmpegPath) {
@@ -665,10 +673,10 @@ app.get('/api/stream-download', async (req, res) => {
   let streamSuccess = false;
   let lastError = '';
 
-  // Attempt 2: iOS client player (bypasses YouTube datacenter bot block & PO Tokens)
+  // Attempt 2: Android client player (bypasses YouTube datacenter bot block on Cloud Servers like Railway)
   try {
-    const args1 = buildYtdlpArgs(targetFormat, true, 'ios');
-    console.log(`Starting Temp-Buffer Download (Attempt 2 iOS): yt-dlp ${args1.join(' ')}`);
+    const args1 = buildYtdlpArgs(targetFormat, true, 'android');
+    console.log(`Starting Temp-Buffer Download (Attempt 2 Android): yt-dlp ${args1.join(' ')}`);
     await execFilePromise(YTDLP_PATH, args1, { timeout: 600000 });
     if (fs.existsSync(tempFile) && fs.statSync(tempFile).size > 0) {
       streamSuccess = true;
