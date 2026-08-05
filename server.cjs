@@ -48,6 +48,29 @@ function ensureCookies() {
   }
 }
 
+async function fetchYouTubeOembedFallback(url) {
+  const videoIdMatch = url.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+  const videoId = videoIdMatch ? videoIdMatch[1] : null;
+  if (!videoId) throw new Error('Invalid YouTube ID');
+
+  const oembedRes = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+  if (!oembedRes.ok) throw new Error('YouTube oEmbed API returned error');
+  const oembedData = await oembedRes.json();
+
+  return {
+    id: videoId,
+    title: oembedData.title || 'YouTube Video',
+    thumbnail: oembedData.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+    duration: 0,
+    webpage_url: `https://www.youtube.com/watch?v=${videoId}`,
+    url: `https://www.youtube.com/watch?v=${videoId}`,
+    formats: [
+      { format_id: 'best', ext: 'mp4', quality: '1080p Full HD', vcodec: 'avc1', acodec: 'mp4a', url: `https://www.youtube.com/watch?v=${videoId}` },
+      { format_id: 'bestaudio/best', ext: 'mp3', quality: '320kbps MP3 Audio', vcodec: 'none', acodec: 'mp3', abr: 320 }
+    ]
+  };
+}
+
 async function fetchVideoInfoWithAutoRetry(url) {
   ensureCookies();
   const cookiesPath = path.join(__dirname, 'cookies.txt');
@@ -91,9 +114,19 @@ async function fetchVideoInfoWithAutoRetry(url) {
     const { stdout } = await execPromise(cmd4, { maxBuffer: 1024 * 1024 * 10 });
     return JSON.parse(stdout);
   } catch (err4) {
-    console.error(`[Auto-Fix Failed] All 4 extraction attempts failed for ${url}:`, err4);
-    throw new Error('Unable to extract video information. Please verify the link is public and active.');
+    console.warn(`[Auto-Fix Retry 4] Mobile fetch failed for ${url}. Trying YouTube oEmbed Fallback...`);
   }
+
+  // Attempt 5: Unbreakable YouTube Official oEmbed API Fallback
+  if (isYouTube) {
+    try {
+      return await fetchYouTubeOembedFallback(url);
+    } catch (err5) {
+      console.error(`[Auto-Fix Retry 5] oEmbed fallback failed for ${url}:`, err5);
+    }
+  }
+
+  throw new Error('Unable to extract video information. Please verify the link is public and active.');
 }
 
 // Fetch video info

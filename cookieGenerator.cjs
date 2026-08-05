@@ -7,10 +7,14 @@ puppeteer.use(StealthPlugin());
 (async () => {
   console.log('Launching stealth browser to bypass bot protections...');
   try {
-    const browser = await puppeteer.launch({ 
-      headless: true, // Use the new headless mode
-      args: ['--no-sandbox', '--disable-setuid-sandbox'] 
-    });
+    const launchOptions = { 
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] 
+    };
+    if (process.env.PUPPETEER_EXECUTABLE_PATH) {
+      launchOptions.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+    }
+    const browser = await puppeteer.launch(launchOptions);
     
     const page = await browser.newPage();
     console.log('Navigating to YouTube to generate human session...');
