@@ -324,7 +324,7 @@ async function fetchYouTubeOembedFallback(url) {
 }
 
 
-async function fetchVideoInfoWithAutoRetry(url) {
+async function fetchVideoInfoWithAutoRetry(url, userIp = '') {
   const cleanUrl = (url || '').trim();
   ensureCookies();
   const cookiesPath = path.join(__dirname, 'cookies.txt');
@@ -333,14 +333,16 @@ async function fetchVideoInfoWithAutoRetry(url) {
   // Fast oEmbed & Piped task (resolves in ~150ms)
   const fastOembedPromise = isYouTube ? fetchYouTubeOembedFallback(cleanUrl) : Promise.reject(new Error('not_youtube'));
 
-  // Fast yt-dlp task with random proxy selection & automatic failover retry
+  // Fast yt-dlp task with random proxy selection + user IP geo-bypass
   const fastYtdlpPromise = execWithProxyRetry(async (selectedProxy) => {
     let extractorArg = isYouTube ? '--extractor-args "youtube:player_client=tvhtml5,android_creator" ' : '';
     let proxyArg = selectedProxy ? `--proxy "${selectedProxy}" ` : '';
-    let cmd = `"${YTDLP_PATH}" ${proxyArg}${extractorArg}--js-runtimes node --no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
+    let geoArg = userIp ? `--geo-bypass-ip-block "${userIp}" ` : '--geo-bypass ';
+    let cmd = `"${YTDLP_PATH}" ${proxyArg}${extractorArg}${geoArg}--js-runtimes node --no-warnings --no-playlist -j "${cleanUrl}"`;
     const { stdout } = await execPromise(cmd, { timeout: 15000, maxBuffer: 1024 * 1024 * 10 });
     return JSON.parse(stdout);
   });
+
 
 
 
@@ -385,7 +387,9 @@ app.post('/api/info', async (req, res) => {
   }
 
   try {
-    const data = await fetchVideoInfoWithAutoRetry(url);
+    const userIp = (req.headers['x-forwarded-for']?.split(',')[0] || req.headers['x-real-ip'] || req.socket?.remoteAddress || '').trim();
+    const data = await fetchVideoInfoWithAutoRetry(url, userIp);
+
 
     const totalSecs = Math.floor(Number(data.duration) || 0);
     const mins = Math.floor(totalSecs / 60);
