@@ -309,12 +309,13 @@ async function fetchVideoInfoWithAutoRetry(url) {
     let proxyArg = activeProxy ? `--proxy "${activeProxy}" ` : '';
     let cmd = `"${YTDLP_PATH}" ${proxyArg}${extractorArg}--js-runtimes node --no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
     try {
-      const { stdout } = await execPromise(cmd, { timeout: 10000, maxBuffer: 1024 * 1024 * 10 });
+      const { stdout } = await execPromise(cmd, { timeout: 20000, maxBuffer: 1024 * 1024 * 10 });
       resolve(JSON.parse(stdout));
     } catch (e) {
       reject(e);
     }
   });
+
 
 
 
@@ -721,7 +722,8 @@ async function getYouTubeStreamsNode(videoId) {
       '--extractor-args', 'youtube:player_client=tvhtml5,android_creator',
       targetUrl
     ];
-    const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 10000, maxBuffer: 50 * 1024 * 1024 });
+    const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 20000, maxBuffer: 50 * 1024 * 1024 });
+
 
 
 
