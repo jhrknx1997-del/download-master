@@ -251,17 +251,18 @@ async function fetchVideoInfoWithAutoRetry(url) {
   // Fast oEmbed & Piped task (resolves in ~150ms)
   const fastOembedPromise = isYouTube ? fetchYouTubeOembedFallback(cleanUrl) : Promise.reject(new Error('not_youtube'));
 
-  // Fast yt-dlp task with ejs challenge solver & cookies
+  // Fast yt-dlp task with tvhtml5 client (bypasses bot detection instantly)
   const fastYtdlpPromise = new Promise(async (resolve, reject) => {
-    let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100 && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
-    let cmd = `"${YTDLP_PATH}" ${cookieArg}--remote-components ejs:github --no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
+    let extractorArg = isYouTube ? '--extractor-args "youtube:player_client=tvhtml5,android_creator" ' : '';
+    let cmd = `"${YTDLP_PATH}" ${extractorArg}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
     try {
-      const { stdout } = await execPromise(cmd, { timeout: 8000, maxBuffer: 1024 * 1024 * 10 });
+      const { stdout } = await execPromise(cmd, { timeout: 10000, maxBuffer: 1024 * 1024 * 10 });
       resolve(JSON.parse(stdout));
     } catch (e) {
       reject(e);
     }
   });
+
 
 
   try {
@@ -633,21 +634,18 @@ app.get('/api/mux-stream', async (req, res) => {
   req.on('close', () => { try { ffProc.kill(); } catch (e) {} });
 });
 
-// Multi-Instance Node Stream URL Aggregator for YouTube (yt-dlp EJS + Piped + Invidious)
+// Multi-Instance Node Stream URL Aggregator for YouTube (tvhtml5 TV Client + Piped + Invidious)
 async function getYouTubeStreamsNode(videoId) {
   const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const cookiesPath = path.join(__dirname, 'cookies.txt');
-  let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) ? ['--cookies', cookiesPath] : [];
 
-  // Tier 1: Fast yt-dlp with ejs:github challenge solver & cookies
+  // Tier 1: YouTube TV Client (tvhtml5,android_creator) — Instant 1080p+Audio, No Cookies/PO-Token Needed!
   try {
     const args = [
       '-J', '--no-playlist', '--geo-bypass',
-      ...cookieArg,
-      '--remote-components', 'ejs:github',
+      '--extractor-args', 'youtube:player_client=tvhtml5,android_creator',
       targetUrl
     ];
-    const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 8000, maxBuffer: 50 * 1024 * 1024 });
+    const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 10000, maxBuffer: 50 * 1024 * 1024 });
     const data = JSON.parse(stdout);
     if (data && data.formats && data.formats.length > 0) {
       const videoMap = {}, audioMap = {};
@@ -655,12 +653,12 @@ async function getYouTubeStreamsNode(videoId) {
         if (!f.url) continue;
         if (f.vcodec !== 'none' && f.height) {
           if (!videoMap[f.height] || (f.tbr || 0) > (videoMap[f.height].tbr || 0)) {
-            videoMap[f.height] = { height: f.height, url: f.url, bitrate: f.tbr || 0, width: f.width || 0 };
+            videoMap[f.height] = { height: f.height, url: f.url, bitrate: f.tbr || 0, width: f.width || 0, format_id: f.format_id };
           }
         } else if (f.acodec !== 'none') {
           const abr = Math.round(f.abr || f.tbr || 128);
           if (!audioMap[abr] || (f.abr || 0) > (audioMap[abr].abr || 0)) {
-            audioMap[abr] = { url: f.url, bitrate: abr };
+            audioMap[abr] = { url: f.url, bitrate: abr, format_id: f.format_id };
           }
         }
       }
@@ -668,15 +666,16 @@ async function getYouTubeStreamsNode(videoId) {
       const sortedAudios = Object.values(audioMap).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
 
       if (sortedVideos.length > 0 || sortedAudios.length > 0) {
-        console.log(`[yt-dlp EJS Tier 1]: Extracted ${sortedVideos.length} video resolutions, ${sortedAudios.length} audio bitrates`);
+        console.log(`[tvhtml5 Tier 1]: Extracted ${sortedVideos.length} video resolutions, ${sortedAudios.length} audio bitrates`);
         return { sortedVideos, bestAudio: sortedAudios[0] || null };
       }
     }
   } catch (e) {
-    console.warn('[yt-dlp EJS Tier 1 Fail]:', e.message.substring(0, 150));
+    console.warn('[tvhtml5 Tier 1 Fail]:', e.message.substring(0, 150));
   }
 
   // Tier 2: Piped Mirrors
+
 
   const pipedInstances = [
     `https://pipedapi.adminforge.de/streams/${videoId}`,
