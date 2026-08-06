@@ -103,6 +103,13 @@ const PROXY_POOL = [
   ...WEBSHARE_PROXIES
 ].filter(Boolean);
 
+// 🎲 Random Anti-Detect Proxy Picker
+function getRandomProxy() {
+  if (PROXY_POOL.length === 0) return null;
+  const randomIndex = Math.floor(Math.random() * PROXY_POOL.length);
+  return PROXY_POOL[randomIndex];
+}
+
 let proxyIndex = 0;
 function getNextProxy() {
   if (PROXY_POOL.length === 0) return null;
@@ -110,6 +117,30 @@ function getNextProxy() {
   proxyIndex++;
   return proxy;
 }
+
+// 🔄 Auto-Failover Proxy Retry Engine (If 1 fails, tries up to 3 random proxies in parallel)
+async function execWithProxyRetry(commandFn) {
+  const tried = new Set();
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let proxy = getRandomProxy();
+    // Ensure we don't repeat the exact same failed proxy on retry
+    while (proxy && tried.has(proxy) && tried.size < PROXY_POOL.length) {
+      proxy = getRandomProxy();
+    }
+    if (proxy) tried.add(proxy);
+
+    try {
+      return await commandFn(proxy);
+    } catch (err) {
+      console.warn(`[Proxy Failover]: Proxy attempt ${attempt + 1} (${proxy ? proxy.split('@')[1] : 'direct'}) failed: ${err.message.substring(0, 60)}`);
+      lastError = err;
+    }
+  }
+  throw lastError || new Error('All proxy attempts failed');
+}
+
 
 
 
@@ -302,19 +333,15 @@ async function fetchVideoInfoWithAutoRetry(url) {
   // Fast oEmbed & Piped task (resolves in ~150ms)
   const fastOembedPromise = isYouTube ? fetchYouTubeOembedFallback(cleanUrl) : Promise.reject(new Error('not_youtube'));
 
-  // Fast yt-dlp task with Webshare proxy & tvhtml5 client (bypasses bot detection instantly)
-  const fastYtdlpPromise = new Promise(async (resolve, reject) => {
+  // Fast yt-dlp task with random proxy selection & automatic failover retry
+  const fastYtdlpPromise = execWithProxyRetry(async (selectedProxy) => {
     let extractorArg = isYouTube ? '--extractor-args "youtube:player_client=tvhtml5,android_creator" ' : '';
-    let activeProxy = getNextProxy();
-    let proxyArg = activeProxy ? `--proxy "${activeProxy}" ` : '';
+    let proxyArg = selectedProxy ? `--proxy "${selectedProxy}" ` : '';
     let cmd = `"${YTDLP_PATH}" ${proxyArg}${extractorArg}--js-runtimes node --no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
-    try {
-      const { stdout } = await execPromise(cmd, { timeout: 20000, maxBuffer: 1024 * 1024 * 10 });
-      resolve(JSON.parse(stdout));
-    } catch (e) {
-      reject(e);
-    }
+    const { stdout } = await execPromise(cmd, { timeout: 15000, maxBuffer: 1024 * 1024 * 10 });
+    return JSON.parse(stdout);
   });
+
 
 
 
@@ -708,27 +735,28 @@ app.get('/api/mux-stream', async (req, res) => {
 async function getYouTubeStreamsNode(videoId) {
   const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-  // Tier 1: YouTube TV Client + Node JS Runtime — Instant 1080p+Audio, No Bot Blocks!
+  // Tier 1: YouTube TV Client + Anti-Detect Random Proxy Failover Engine
   try {
     const cookiesPath = path.join(__dirname, 'cookies.txt');
-    const activeProxy = getNextProxy();
-    let proxyArg = activeProxy ? ['--proxy', activeProxy] : [];
+    const data = await execWithProxyRetry(async (selectedProxy) => {
+      let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) ? ['--cookies', cookiesPath] : [];
+      let proxyArg = selectedProxy ? ['--proxy', selectedProxy] : [];
 
-    const args = [
-      '-J', '--no-playlist', '--geo-bypass',
-      '--js-runtimes', 'node',
-      ...cookieArg,
-      ...proxyArg,
-      '--extractor-args', 'youtube:player_client=tvhtml5,android_creator',
-      targetUrl
-    ];
-    const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 20000, maxBuffer: 50 * 1024 * 1024 });
+      const args = [
+        '-J', '--no-playlist', '--geo-bypass',
+        '--js-runtimes', 'node',
+        ...cookieArg,
+        ...proxyArg,
+        '--extractor-args', 'youtube:player_client=tvhtml5,android_creator',
+        targetUrl
+      ];
+      const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 15000, maxBuffer: 50 * 1024 * 1024 });
+      return JSON.parse(stdout);
+    });
 
 
-
-
-    const data = JSON.parse(stdout);
     if (data && data.formats && data.formats.length > 0) {
+
       const videoMap = {}, audioMap = {};
       for (const f of data.formats) {
         if (!f.url) continue;
