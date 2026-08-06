@@ -303,9 +303,14 @@ app.post('/api/info', async (req, res) => {
     const secs = totalSecs % 60;
     const durationStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
 
+    // Extract best audio stream for muxing
+    const audioList = (data.formats || []).filter(f => f.url && f.acodec !== 'none');
+    const bestAudioStream = audioList.sort((a, b) => (b.abr || b.tbr || 0) - (a.abr || a.tbr || 0))[0];
+    const bestAudioUrl = bestAudioStream ? bestAudioStream.url : null;
+
     // Extract all video formats (preserving pre-formatted fallbacks)
     let rawFormats = (data.formats || [])
-      .filter(f => f.vcodec !== 'none')
+      .filter(f => f.url && f.vcodec !== 'none')
       .map(f => {
         let displayHeight = f.height || (f.format_note ? parseInt(f.format_note) : 0);
         if (f.width && f.height && f.width < f.height) {
@@ -320,7 +325,8 @@ app.post('/api/info', async (req, res) => {
           filesize: f.filesize || f.filesize_approx,
           has_audio: f.acodec !== 'none',
           tbr: f.tbr,
-          direct_url: f.url
+          direct_url: f.url,
+          audio_url: bestAudioUrl
         };
       })
       .filter((v, i, a) => a.findIndex(t => (t.quality === v.quality)) === i)
@@ -329,6 +335,7 @@ app.post('/api/info', async (req, res) => {
          const resB = (b.height > 0) ? b.height : (parseInt(b.quality) || b.tbr || 0);
          return resB - resA;
       });
+
 
     let videoFormats = data.videoFormats || (rawFormats.length > 1 ? rawFormats : null);
 
@@ -638,14 +645,19 @@ app.get('/api/mux-stream', async (req, res) => {
 async function getYouTubeStreamsNode(videoId) {
   const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-  // Tier 1: YouTube TV Client (tvhtml5,android_creator) — Instant 1080p+Audio, No Cookies/PO-Token Needed!
+  // Tier 1: YouTube TV Client + Node JS Runtime — Instant 1080p+Audio, No Bot Blocks!
   try {
+    const cookiesPath = path.join(__dirname, 'cookies.txt');
+    let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) ? ['--cookies', cookiesPath] : [];
     const args = [
       '-J', '--no-playlist', '--geo-bypass',
+      '--js-runtimes', 'node',
+      ...cookieArg,
       '--extractor-args', 'youtube:player_client=tvhtml5,android_creator',
       targetUrl
     ];
     const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 10000, maxBuffer: 50 * 1024 * 1024 });
+
     const data = JSON.parse(stdout);
     if (data && data.formats && data.formats.length > 0) {
       const videoMap = {}, audioMap = {};
