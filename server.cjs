@@ -799,32 +799,11 @@ app.get('/api/stream-download', async (req, res) => {
   const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
   const fileName = `${cleanTitle}.${ext}`;
 
-  // If direct CDN stream URL is provided, stream directly (ZERO yt-dlp, ZERO ffmpeg)
+  // Direct stream redirect engine (ZERO yt-dlp, ZERO ffmpeg overhead)
   if (direct_url && direct_url.startsWith('http')) {
-    try {
-      const httpModule = direct_url.startsWith('https') ? require('https') : require('http');
-      const cdnReq = httpModule.get(direct_url, (cdnRes) => {
-        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-          return res.redirect(cdnRes.headers.location);
-        }
-        if (cdnRes.statusCode === 200) {
-          res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-          res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-          if (cdnRes.headers['content-length']) {
-            res.setHeader('Content-Length', cdnRes.headers['content-length']);
-          }
-          return cdnRes.pipe(res);
-        }
-        return res.redirect(direct_url);
-      });
-      cdnReq.on('error', () => {
-        try { res.redirect(direct_url); } catch (e) {}
-      });
-      return;
-    } catch (e) {
-      return res.redirect(direct_url);
-    }
+    return res.redirect(direct_url);
   }
+
 
 
   // Fast Temp File Buffer Download Engine (Identical to Localhost Processing)
