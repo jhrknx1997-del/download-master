@@ -700,8 +700,10 @@ app.get('/api/mux-stream', async (req, res) => {
 
   console.log(`[Mux-Stream]: Muxing video=${video_url.substring(0, 60)}... audio=${audio_url ? audio_url.substring(0, 60) + '...' : 'none'}`);
 
+  res.setHeader('Accept-Ranges', 'bytes');
   res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
   res.setHeader('Content-Type', 'video/mp4');
+
 
   const ffArgs = ['-y'];
   ffArgs.push('-i', video_url);
@@ -898,8 +900,62 @@ app.get('/api/stream-download', async (req, res) => {
 
   // Direct stream redirect engine (ZERO yt-dlp, ZERO ffmpeg overhead)
   if (direct_url && direct_url.startsWith('http')) {
-    return res.redirect(direct_url);
+    return res.redirect(`/api/resumable-stream?url=${encodeURIComponent(direct_url)}&title=${encodeURIComponent(cleanTitle)}&type=${type || 'video'}`);
   }
+
+// World-Class Resumable Stream Proxy Endpoint (Supports Pause, Resume, Range Headers, 206 Partial Content, Network Switch)
+app.get('/api/resumable-stream', async (req, res) => {
+  const { url, title, type } = req.query;
+  if (!url) return res.status(400).send('URL is required');
+
+  const cleanTitle = (title || 'video').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
+  const ext = type === 'audio' ? 'mp3' : 'mp4';
+  const fileName = `${cleanTitle}.${ext}`;
+
+  try {
+    const range = req.headers.range;
+    const reqHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': '*/*'
+    };
+    if (range) {
+      reqHeaders['Range'] = range;
+    }
+
+    const httpModule = url.startsWith('https') ? require('https') : require('http');
+
+    const proxyReq = httpModule.get(url, { headers: reqHeaders }, (cdnRes) => {
+      if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+        return res.redirect(`/api/resumable-stream?url=${encodeURIComponent(cdnRes.headers.location)}&title=${encodeURIComponent(cleanTitle)}&type=${type || 'video'}`);
+      }
+
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Content-Type', cdnRes.headers['content-type'] || (type === 'audio' ? 'audio/mpeg' : 'video/mp4'));
+
+      if (cdnRes.headers['content-range']) {
+        res.setHeader('Content-Range', cdnRes.headers['content-range']);
+      }
+      if (cdnRes.headers['content-length']) {
+        res.setHeader('Content-Length', cdnRes.headers['content-length']);
+      }
+
+      res.status(cdnRes.statusCode || 200);
+      cdnRes.pipe(res);
+    });
+
+    proxyReq.on('error', (e) => {
+      if (!res.headersSent) res.redirect(url);
+    });
+
+    req.on('close', () => {
+      try { proxyReq.destroy(); } catch (e) {}
+    });
+  } catch (e) {
+    if (!res.headersSent) res.redirect(url);
+  }
+});
+
 
 
 
