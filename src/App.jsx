@@ -564,7 +564,15 @@ function App() {
                             style={{ background: '#10b981', color: '#fff', border: 'none', padding: '8px 18px', borderRadius: '8px', fontWeight: 'bold', fontSize: '0.88rem', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', boxShadow: '0 4px 12px rgba(16, 185, 129, 0.3)' }}
                             onClick={() => {
                               const title = result?.title || 'video';
-                              const fmt = f.format_id || f.quality || '1080p';
+                              if (f.direct_url && f.audio_url) {
+                                window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(f.direct_url)}&audio_url=${encodeURIComponent(f.audio_url)}&title=${encodeURIComponent(title)}`;
+                                return;
+                              }
+                              if (f.direct_url) {
+                                window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(f.direct_url)}&title=${encodeURIComponent(title)}`;
+                                return;
+                              }
+                              const fmt = f.height ? `${f.height}p` : (f.format_id || '1080p');
                               window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=video&format_id=${encodeURIComponent(fmt)}&title=${encodeURIComponent(title)}`;
                             }}
                           >
@@ -573,6 +581,7 @@ function App() {
                           </button>
                         </div>
                       ))}
+
                     </div>
                   </div>
 

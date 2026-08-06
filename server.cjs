@@ -863,6 +863,29 @@ app.get('/api/stream-download', async (req, res) => {
     }
   }
 
+// Helper to convert format_id or quality strings (e.g. '137', '1080p', '136', '720p') to exact pixel height
+function parseTargetHeight(format_id) {
+  if (!format_id) return 0;
+  const str = String(format_id).toLowerCase().trim().replace(/p$/, '');
+  const youtubeFormatCodeMap = {
+    '137': 1080, '399': 1080, '299': 1080, '312': 1080, '270': 1080,
+    '271': 1440, '308': 1440, '400': 1440,
+    '313': 2160, '315': 2160, '401': 2160, '571': 2160,
+    '136': 720,  '298': 720,  '302': 720,
+    '135': 480,  '244': 480,  '247': 480,
+    '134': 360,  '18': 360,   '243': 360,
+    '133': 240,  '242': 240,
+    '160': 144,  '278': 144
+  };
+  if (youtubeFormatCodeMap[str]) return youtubeFormatCodeMap[str];
+  const match = str.match(/(\d{3,4})/);
+  if (match) {
+    const parsed = parseInt(match[1]);
+    if (parsed >= 144) return parsed;
+  }
+  return 0;
+}
+
   // For YouTube URLs: ALWAYS use Piped + Invidious API mirrors + FFmpeg muxing. NEVER run yt-dlp!
   if (isYouTube) {
     const vMatch = targetUrl.match(/(?:v=|\/shorts\/|\/embed\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
@@ -871,16 +894,24 @@ app.get('/api/stream-download', async (req, res) => {
       const streamData = await getYouTubeStreamsNode(videoId);
       if (streamData) {
         const { sortedVideos, bestAudio } = streamData;
-        const numMatch = (format_id || '').match(/(\d{3,4})/);
-        const targetHeight = numMatch ? parseInt(numMatch[1]) : 0;
+        const targetHeight = parseTargetHeight(format_id);
 
         let bestVideo = null;
         if (!isAudio && sortedVideos.length > 0) {
-          bestVideo = targetHeight > 0
-            ? sortedVideos.find(v => v.height === targetHeight) || sortedVideos.find(v => v.height <= targetHeight)
-            : null;
+          // 1. Try exact format_id match first
+          bestVideo = sortedVideos.find(v => String(v.format_id) === String(format_id));
+          
+          // 2. Try target height match (e.g. 1080p, 720p)
+          if (!bestVideo && targetHeight > 0) {
+            bestVideo = sortedVideos.find(v => v.height === targetHeight)
+                     || sortedVideos.find(v => v.height <= targetHeight)
+                     || sortedVideos.find(v => v.height > targetHeight);
+          }
+          
+          // 3. Fallback to best available quality
           if (!bestVideo) bestVideo = sortedVideos[0];
         }
+
 
         if (isAudio && bestAudio?.url) {
           console.log(`[Server Audio Stream]: ${bestAudio.bitrate}bps`);
