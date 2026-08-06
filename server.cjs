@@ -251,18 +251,18 @@ async function fetchVideoInfoWithAutoRetry(url) {
   // Fast oEmbed & Piped task (resolves in ~150ms)
   const fastOembedPromise = isYouTube ? fetchYouTubeOembedFallback(cleanUrl) : Promise.reject(new Error('not_youtube'));
 
-  // Fast yt-dlp task with strict 2.5s timeout
+  // Fast yt-dlp task with ejs challenge solver & cookies
   const fastYtdlpPromise = new Promise(async (resolve, reject) => {
     let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100 && isYouTube) ? `--cookies "${cookiesPath}" ` : '';
-    let extractorArg = isYouTube ? '--extractor-args "youtube:player_client=ios" ' : '';
-    let cmd = `"${YTDLP_PATH}" ${cookieArg}${extractorArg}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
+    let cmd = `"${YTDLP_PATH}" ${cookieArg}--remote-components ejs:github --no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
     try {
-      const { stdout } = await execPromise(cmd, { timeout: 2500, maxBuffer: 1024 * 1024 * 10 });
+      const { stdout } = await execPromise(cmd, { timeout: 8000, maxBuffer: 1024 * 1024 * 10 });
       resolve(JSON.parse(stdout));
     } catch (e) {
       reject(e);
     }
   });
+
 
   try {
     return await Promise.any([fastOembedPromise, fastYtdlpPromise]);
@@ -631,8 +631,51 @@ app.get('/api/mux-stream', async (req, res) => {
   req.on('close', () => { try { ffProc.kill(); } catch (e) {} });
 });
 
-// Multi-Instance Node Stream URL Aggregator for YouTube (Piped + Invidious)
+// Multi-Instance Node Stream URL Aggregator for YouTube (yt-dlp EJS + Piped + Invidious)
 async function getYouTubeStreamsNode(videoId) {
+  const targetUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const cookiesPath = path.join(__dirname, 'cookies.txt');
+  let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) ? ['--cookies', cookiesPath] : [];
+
+  // Tier 1: Fast yt-dlp with ejs:github challenge solver & cookies
+  try {
+    const args = [
+      '-J', '--no-playlist', '--geo-bypass',
+      ...cookieArg,
+      '--remote-components', 'ejs:github',
+      targetUrl
+    ];
+    const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 8000, maxBuffer: 50 * 1024 * 1024 });
+    const data = JSON.parse(stdout);
+    if (data && data.formats && data.formats.length > 0) {
+      const videoMap = {}, audioMap = {};
+      for (const f of data.formats) {
+        if (!f.url) continue;
+        if (f.vcodec !== 'none' && f.height) {
+          if (!videoMap[f.height] || (f.tbr || 0) > (videoMap[f.height].tbr || 0)) {
+            videoMap[f.height] = { height: f.height, url: f.url, bitrate: f.tbr || 0, width: f.width || 0 };
+          }
+        } else if (f.acodec !== 'none') {
+          const abr = Math.round(f.abr || f.tbr || 128);
+          if (!audioMap[abr] || (f.abr || 0) > (audioMap[abr].abr || 0)) {
+            audioMap[abr] = { url: f.url, bitrate: abr };
+          }
+        }
+      }
+      const sortedVideos = Object.values(videoMap).sort((a, b) => (b.height || 0) - (a.height || 0));
+      const sortedAudios = Object.values(audioMap).sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+      if (sortedVideos.length > 0 || sortedAudios.length > 0) {
+        console.log(`[yt-dlp EJS Tier 1]: Extracted ${sortedVideos.length} video resolutions, ${sortedAudios.length} audio bitrates`);
+        return { sortedVideos, bestAudio: sortedAudios[0] || null };
+      }
+    }
+  } catch (e) {
+    console.warn('[yt-dlp EJS Tier 1 Fail]:', e.message.substring(0, 150));
+  }
+
+  // Tier 2: Piped Mirrors
+
   const pipedInstances = [
     `https://pipedapi.adminforge.de/streams/${videoId}`,
     `https://pipedapi.drgns.space/streams/${videoId}`,
