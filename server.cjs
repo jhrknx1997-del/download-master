@@ -695,14 +695,19 @@ async function getYouTubeStreamsNode(videoId) {
   try {
     const cookiesPath = path.join(__dirname, 'cookies.txt');
     let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) ? ['--cookies', cookiesPath] : [];
+    const customProxy = process.env.CUSTOM_PROXY || process.env.PROXY_URL || '';
+    let proxyArg = customProxy ? ['--proxy', customProxy] : [];
+
     const args = [
       '-J', '--no-playlist', '--geo-bypass',
       '--js-runtimes', 'node',
       ...cookieArg,
+      ...proxyArg,
       '--extractor-args', 'youtube:player_client=tvhtml5,android_creator',
       targetUrl
     ];
     const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 10000, maxBuffer: 50 * 1024 * 1024 });
+
 
     const data = JSON.parse(stdout);
     if (data && data.formats && data.formats.length > 0) {
