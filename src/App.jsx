@@ -363,11 +363,13 @@ function App() {
         console.error('[YouTube download error]', e);
       }
 
-      // All YouTube sources failed — show error in UI, NEVER call yt-dlp
+      // Server fallback stream engine (tvhtml5 + android_creator)
       setIsDownloading(false);
-      alert('⚠️ All stream sources unavailable (Piped + Invidious). Please try again in a minute.');
+      const fmt = selectedObj?.format_id || (targetHeight ? `${targetHeight}p` : '1080p');
+      window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=${type}&format_id=${encodeURIComponent(fmt)}&title=${encodeURIComponent(title)}`;
       return;
     }
+
 
     // ============================================================
     // NON-YOUTUBE: Twitter, TikTok, Instagram, Facebook, etc.
