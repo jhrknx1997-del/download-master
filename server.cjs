@@ -84,11 +84,23 @@ function setCachedMedia(url, data) {
   mediaCache.set(clean, { data, timestamp: Date.now() });
 }
 
-// 🛡️ Multi-Region Proxy Rotator Pool (Bypasses Datacenter IP Blocks)
+// 🛡️ Webshare 10-Proxy High-Speed Rotator Pool (100% Sureshot Residential IP Routing)
+const WEBSHARE_PROXIES = [
+  'http://impttjhg:0feqv2ryusw6@31.59.20.176:6754',
+  'http://impttjhg:0feqv2ryusw6@31.56.127.193:7684',
+  'http://impttjhg:0feqv2ryusw6@45.38.107.97:6014',
+  'http://impttjhg:0feqv2ryusw6@198.105.121.200:6462',
+  'http://impttjhg:0feqv2ryusw6@64.137.96.74:6641',
+  'http://impttjhg:0feqv2ryusw6@198.23.243.226:6361',
+  'http://impttjhg:0feqv2ryusw6@38.154.185.97:6370',
+  'http://impttjhg:0feqv2ryusw6@84.247.60.125:6095',
+  'http://impttjhg:0feqv2ryusw6@142.111.67.146:5611',
+  'http://impttjhg:0feqv2ryusw6@191.96.254.138:6185'
+];
+
 const PROXY_POOL = [
   process.env.CUSTOM_PROXY || '',
-  'http://185.199.229.156:7492',
-  'http://185.199.229.156:7493'
+  ...WEBSHARE_PROXIES
 ].filter(Boolean);
 
 let proxyIndex = 0;
@@ -98,6 +110,7 @@ function getNextProxy() {
   proxyIndex++;
   return proxy;
 }
+
 
 
 // Background cookie generator (non-blocking)
@@ -289,10 +302,12 @@ async function fetchVideoInfoWithAutoRetry(url) {
   // Fast oEmbed & Piped task (resolves in ~150ms)
   const fastOembedPromise = isYouTube ? fetchYouTubeOembedFallback(cleanUrl) : Promise.reject(new Error('not_youtube'));
 
-  // Fast yt-dlp task with tvhtml5 client (bypasses bot detection instantly)
+  // Fast yt-dlp task with Webshare proxy & tvhtml5 client (bypasses bot detection instantly)
   const fastYtdlpPromise = new Promise(async (resolve, reject) => {
     let extractorArg = isYouTube ? '--extractor-args "youtube:player_client=tvhtml5,android_creator" ' : '';
-    let cmd = `"${YTDLP_PATH}" ${extractorArg}--no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
+    let activeProxy = getNextProxy();
+    let proxyArg = activeProxy ? `--proxy "${activeProxy}" ` : '';
+    let cmd = `"${YTDLP_PATH}" ${proxyArg}${extractorArg}--js-runtimes node --no-warnings --no-playlist --geo-bypass -j "${cleanUrl}"`;
     try {
       const { stdout } = await execPromise(cmd, { timeout: 10000, maxBuffer: 1024 * 1024 * 10 });
       resolve(JSON.parse(stdout));
@@ -300,6 +315,7 @@ async function fetchVideoInfoWithAutoRetry(url) {
       reject(e);
     }
   });
+
 
 
 
@@ -694,9 +710,8 @@ async function getYouTubeStreamsNode(videoId) {
   // Tier 1: YouTube TV Client + Node JS Runtime — Instant 1080p+Audio, No Bot Blocks!
   try {
     const cookiesPath = path.join(__dirname, 'cookies.txt');
-    let cookieArg = (fs.existsSync(cookiesPath) && fs.statSync(cookiesPath).size > 100) ? ['--cookies', cookiesPath] : [];
-    const customProxy = process.env.CUSTOM_PROXY || process.env.PROXY_URL || '';
-    let proxyArg = customProxy ? ['--proxy', customProxy] : [];
+    const activeProxy = getNextProxy();
+    let proxyArg = activeProxy ? ['--proxy', activeProxy] : [];
 
     const args = [
       '-J', '--no-playlist', '--geo-bypass',
@@ -707,6 +722,7 @@ async function getYouTubeStreamsNode(videoId) {
       targetUrl
     ];
     const { stdout } = await execFilePromise(YTDLP_PATH, args, { timeout: 10000, maxBuffer: 50 * 1024 * 1024 });
+
 
 
     const data = JSON.parse(stdout);
