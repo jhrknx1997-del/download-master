@@ -563,13 +563,7 @@ function App() {
                                 return;
                               }
                               if (f.direct_url) {
-                                const dl = document.createElement('a');
-                                dl.href = f.direct_url;
-                                dl.target = '_blank';
-                                dl.download = `${title}.mp4`;
-                                document.body.appendChild(dl);
-                                dl.click();
-                                document.body.removeChild(dl);
+                                window.location.href = `/api/resumable-stream?url=${encodeURIComponent(f.direct_url)}&title=${encodeURIComponent(title)}&type=video`;
                                 return;
                               }
                               setSelectedVideoFormat(f.format_id || `${f.height}p`);
@@ -609,13 +603,7 @@ function App() {
                             onClick={() => {
                               const title = result?.title || 'audio';
                               if (a.direct_url) {
-                                const dl = document.createElement('a');
-                                dl.href = a.direct_url;
-                                dl.target = '_blank';
-                                dl.download = `${title}.mp3`;
-                                document.body.appendChild(dl);
-                                dl.click();
-                                document.body.removeChild(dl);
+                                window.location.href = `/api/resumable-stream?url=${encodeURIComponent(a.direct_url)}&title=${encodeURIComponent(title)}&type=audio`;
                                 return;
                               }
                               setSelectedAudioFormat(a.format_id || 'piped_audio');
@@ -629,6 +617,7 @@ function App() {
                       ))}
                     </div>
                   </div>
+
 
 
 
