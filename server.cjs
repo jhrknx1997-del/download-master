@@ -799,35 +799,33 @@ app.get('/api/stream-download', async (req, res) => {
   const cleanTitle = (title || 'download').replace(/[^a-zA-Z0-9_\-]/g, '_').substring(0, 50);
   const fileName = `${cleanTitle}.${ext}`;
 
-  // If direct CDN stream URL (like googlevideo or piped) is provided, stream it directly if valid HTTP 200
-  if (direct_url && direct_url.startsWith('http') && (direct_url.includes('googlevideo.com') || direct_url.includes('piped') || direct_url.includes('cdn'))) {
+  // If direct CDN stream URL is provided, stream directly (ZERO yt-dlp, ZERO ffmpeg)
+  if (direct_url && direct_url.startsWith('http')) {
     try {
       const httpModule = direct_url.startsWith('https') ? require('https') : require('http');
-      const cdnOk = await new Promise((resolve) => {
-        const cdnReq = httpModule.get(direct_url, (cdnRes) => {
-          if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
-            res.redirect(cdnRes.headers.location);
-            return resolve(true);
+      const cdnReq = httpModule.get(direct_url, (cdnRes) => {
+        if (cdnRes.statusCode >= 300 && cdnRes.statusCode < 400 && cdnRes.headers.location) {
+          return res.redirect(cdnRes.headers.location);
+        }
+        if (cdnRes.statusCode === 200) {
+          res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+          res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
+          if (cdnRes.headers['content-length']) {
+            res.setHeader('Content-Length', cdnRes.headers['content-length']);
           }
-          if (cdnRes.statusCode === 200) {
-            res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-            res.setHeader('Content-Type', isAudio ? 'audio/mpeg' : 'video/mp4');
-            if (cdnRes.headers['content-length']) {
-              res.setHeader('Content-Length', cdnRes.headers['content-length']);
-            }
-            cdnRes.pipe(res);
-            return resolve(true);
-          }
-          cdnReq.destroy();
-          resolve(false);
-        });
-        cdnReq.on('error', () => resolve(false));
+          return cdnRes.pipe(res);
+        }
+        return res.redirect(direct_url);
       });
-      if (cdnOk) return;
+      cdnReq.on('error', () => {
+        try { res.redirect(direct_url); } catch (e) {}
+      });
+      return;
     } catch (e) {
-      console.warn('[Direct CDN pipe error]:', e.message);
+      return res.redirect(direct_url);
     }
   }
+
 
   // Fast Temp File Buffer Download Engine (Identical to Localhost Processing)
   const tempFile = path.join(TEMP_DIR, `stream_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.${ext}`);

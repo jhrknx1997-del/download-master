@@ -569,8 +569,13 @@ function App() {
                                 window.location.href = `/api/mux-stream?video_url=${encodeURIComponent(f.direct_url)}&audio_url=${encodeURIComponent(f.audio_url)}&title=${encodeURIComponent(title)}`;
                                 return;
                               }
+                              if (f.direct_url) {
+                                window.location.href = `/api/stream-download?direct_url=${encodeURIComponent(f.direct_url)}&title=${encodeURIComponent(title)}&type=video`;
+                                return;
+                              }
                               window.location.href = `/api/stream-download?url=${encodeURIComponent(result.url)}&type=video&format_id=${encodeURIComponent(fmt)}&title=${encodeURIComponent(title)}`;
                             }}
+
                           >
                             <Download size={15} />
                             <span>Download</span>
