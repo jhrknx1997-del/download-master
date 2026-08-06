@@ -611,9 +611,11 @@ app.get('/api/mux-stream', async (req, res) => {
     ffArgs.push('-i', audio_url);
     ffArgs.push('-c:v', 'copy', '-c:a', 'aac');
   } else {
-    ffArgs.push('-c:v', 'copy', '-an'); // video only
+    // If video_url already contains audio or progressive stream, preserve both tracks
+    ffArgs.push('-c', 'copy');
   }
   ffArgs.push('-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1');
+
 
   const ffProc = spawn(ffmpegPath, ffArgs);
 
