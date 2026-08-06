@@ -426,22 +426,29 @@ app.post('/api/info', async (req, res) => {
       });
 
 
-    let videoFormats = data.videoFormats || (rawFormats.length > 1 ? rawFormats : null);
+    let videoFormats = data.videoFormats || (rawFormats && rawFormats.length > 0 ? rawFormats : null);
 
-    // If single format or fallback returned, provide full resolution list (1080p -> 144p)
-    if (!videoFormats || videoFormats.length <= 1) {
+    // If fallback is needed, construct ONLY up to the video's actual max native resolution
+    if (!videoFormats || videoFormats.length === 0) {
       const secs = totalSecs || 270;
-      videoFormats = [
-        { format_id: '2160p', ext: 'mp4', quality: '2160p 4K Ultra HD', resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
-        { format_id: '1440p', ext: 'mp4', quality: '1440p 2K QHD', resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
-        { format_id: '1080p', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
-        { format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
-        { format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
-        { format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
-        { format_id: '240p', ext: 'mp4', quality: '240p', resolution: '426x240', filesize: Math.round(secs * 0.04 * 1024 * 1024), has_audio: true },
-        { format_id: '144p', ext: 'mp4', quality: '144p', resolution: '256x144', filesize: Math.round(secs * 0.02 * 1024 * 1024), has_audio: true }
+      // Extract max native height from data if available, default to 1080p
+      const maxH = data.height || (data.formats ? Math.max(...data.formats.map(f => f.height || 0)) : 1080) || 1080;
+
+      const allPresets = [
+        { height: 2160, format_id: '2160p', ext: 'mp4', quality: '2160p 4K Ultra HD', resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
+        { height: 1440, format_id: '1440p', ext: 'mp4', quality: '1440p 2K QHD', resolution: '2560x1440', filesize: Math.round(secs * 1.1 * 1024 * 1024), has_audio: true },
+        { height: 1080, format_id: '1080p', ext: 'mp4', quality: '1080p Full HD', resolution: '1920x1080', filesize: Math.round(secs * 0.55 * 1024 * 1024), has_audio: true },
+        { height: 720, format_id: '720p', ext: 'mp4', quality: '720p HD', resolution: '1280x720', filesize: Math.round(secs * 0.3 * 1024 * 1024), has_audio: true },
+        { height: 480, format_id: '480p', ext: 'mp4', quality: '480p SD', resolution: '854x480', filesize: Math.round(secs * 0.15 * 1024 * 1024), has_audio: true },
+        { height: 360, format_id: '360p', ext: 'mp4', quality: '360p SD', resolution: '640x360', filesize: Math.round(secs * 0.08 * 1024 * 1024), has_audio: true },
+        { height: 240, format_id: '240p', ext: 'mp4', quality: '240p', resolution: '426x240', filesize: Math.round(secs * 0.04 * 1024 * 1024), has_audio: true },
+        { height: 144, format_id: '144p', ext: 'mp4', quality: '144p', resolution: '256x144', filesize: Math.round(secs * 0.02 * 1024 * 1024), has_audio: true }
       ];
+
+      // Keep only formats <= maxH
+      videoFormats = allPresets.filter(p => p.height <= (maxH > 0 ? maxH : 1080));
     }
+
 
     // Audio formats
     let audioFormats = data.audioFormats || (data.formats || [])
