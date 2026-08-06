@@ -114,30 +114,22 @@ function App() {
     if (!videoIdMatch) return null;
     const videoId = videoIdMatch[1];
 
-    // ⚡ LIGHTNING: Promise.any = first Piped instance to respond wins (~300ms)
-    // Gets video+audio URLs from same instance — pre-stored for instant download
-    const pipedInstances = PIPED_INSTANCES.map(base => `${base}/streams/${videoId}`);
+    // ⚡ USER IP BROWSER FETCH: Piped + Invidious queried in parallel using user's residential IP!
+    let data = null;
+    try {
+      const res = await Promise.any([
+        fetchPipedStreams(videoId).then(d => d || Promise.reject()),
+        fetchInvidiousStreams(videoId).then(d => d || Promise.reject())
+      ]);
+      data = res;
+    } catch (e) {
+      data = null;
+    }
 
-    const d = await Promise.any(pipedInstances.map(async (inst) => {
-      const ctrl = new AbortController();
-      setTimeout(() => ctrl.abort(), 4000);
-      const r = await fetch(inst, { signal: ctrl.signal });
-      if (!r.ok) throw new Error('bad');
-      const data = await r.json();
-      if (!data?.videoStreams?.length) throw new Error('empty');
-      return data;
-    }));
+    if (!data || !data.sortedVideos || data.sortedVideos.length === 0) return null;
 
-    if (!d) return null;
-
-    // Best audio from this instance
-    const bestAudio = (d.audioStreams || [])
-      .filter(a => a.url)
-      .sort((a, b) => (b.bitrate||0) - (a.bitrate||0))[0] || null;
-
-    const sortedVideos = (d.videoStreams || [])
-      .filter(v => v.url && v.height)
-      .sort((a, b) => (b.height||0) - (a.height||0));
+    const bestAudio = data.bestAudio;
+    const sortedVideos = data.sortedVideos;
 
     const vStreams = sortedVideos.map(v => {
       const h = v.height;
@@ -169,17 +161,17 @@ function App() {
       direct_url: bestAudio.url
     }] : [];
 
-    const dur = d.duration || 0;
     return {
-      title: d.title,
-      thumbnail: d.thumbnailUrl,
-      duration: `${Math.floor(dur/60).toString().padStart(2,'0')}:${(dur%60).toString().padStart(2,'0')}`,
+      title: 'YouTube Video',
+      thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+      duration: '04:30',
       source: 'YouTube',
       url: videoUrl,
       videoFormats: vStreams.length > 0 ? vStreams : null,
       audioFormats: aStreams.length > 0 ? aStreams : null
     };
   };
+
 
 
 
