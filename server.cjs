@@ -426,13 +426,12 @@ app.post('/api/info', async (req, res) => {
       });
 
 
-    let videoFormats = data.videoFormats || (rawFormats && rawFormats.length > 0 ? rawFormats : null);
+    let videoFormats = (rawFormats && rawFormats.length > 0) ? rawFormats : null;
 
-    // If fallback is needed, construct ONLY up to the video's actual max native resolution
+    // If no raw video formats were extracted, fallback strictly up to the video's actual max height
     if (!videoFormats || videoFormats.length === 0) {
       const secs = totalSecs || 270;
-      // Extract max native height from data if available, default to 1080p
-      const maxH = data.height || (data.formats ? Math.max(...data.formats.map(f => f.height || 0)) : 1080) || 1080;
+      const maxH = data.height || (data.formats ? Math.max(...data.formats.map(f => f.height || 0)) : 0) || 1080;
 
       const allPresets = [
         { height: 2160, format_id: '2160p', ext: 'mp4', quality: '2160p 4K Ultra HD', resolution: '3840x2160', filesize: Math.round(secs * 2.2 * 1024 * 1024), has_audio: true },
@@ -445,9 +444,9 @@ app.post('/api/info', async (req, res) => {
         { height: 144, format_id: '144p', ext: 'mp4', quality: '144p', resolution: '256x144', filesize: Math.round(secs * 0.02 * 1024 * 1024), has_audio: true }
       ];
 
-      // Keep only formats <= maxH
-      videoFormats = allPresets.filter(p => p.height <= (maxH > 0 ? maxH : 1080));
+      videoFormats = allPresets.filter(p => p.height <= maxH);
     }
+
 
 
     // Audio formats
