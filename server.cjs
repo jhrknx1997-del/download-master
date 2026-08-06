@@ -929,6 +929,12 @@ app.get('/api/resumable-stream', async (req, res) => {
         return res.redirect(`/api/resumable-stream?url=${encodeURIComponent(cdnRes.headers.location)}&title=${encodeURIComponent(cleanTitle)}&type=${type || 'video'}`);
       }
 
+      // If CDN returns 403 or non-200/206 status, redirect browser to direct URL (fixes 0-byte download)
+      if (cdnRes.statusCode !== 200 && cdnRes.statusCode !== 206) {
+        return res.redirect(url);
+      }
+
+
       res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
       res.setHeader('Content-Type', cdnRes.headers['content-type'] || (type === 'audio' ? 'audio/mpeg' : 'video/mp4'));
