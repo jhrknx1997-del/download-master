@@ -143,8 +143,8 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
 
         data = None
         details = {}
-        for proxy in get_proxy_sequence():
-            for ua in USER_AGENTS:
+        for proxy in get_proxy_sequence()[:2]:
+            for ua in USER_AGENTS[:1]:
                 try:
                     session = requests.Session()
                     if proxy:
@@ -156,7 +156,8 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                     session.cookies.set("CONSENT", "PENDING+987", domain=".youtube.com")
                     session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
 
-                    res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=4)
+                    res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=2.5)
+
                     if res.status_code != 200:
                         continue
 
