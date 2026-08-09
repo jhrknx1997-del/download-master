@@ -217,8 +217,6 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
     key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    if key in info_cache:
-        return info_cache[key]
     
     # 1. Try Custom Mobile Session Scraper FIRST for YouTube (Bypasses bot login gate)
     if "youtube.com" in url or "youtu.be" in url:
@@ -226,6 +224,9 @@ def extract_metadata(url: str) -> dict:
         if scraped and scraped.get("formats"):
             info_cache[key] = scraped
             return scraped
+
+    if key in info_cache:
+        return info_cache[key]
 
     # 2. Fallback to yt_dlp for TikTok, Instagram, Facebook, X, Reddit
     opts = dict(YDL_BASE_OPTS)
@@ -238,6 +239,7 @@ def extract_metadata(url: str) -> dict:
     if info:
         info_cache[key] = info
     return info
+
 
 def process_formats(info: dict) -> list:
     if "formats" in info and isinstance(info["formats"], list) and info["formats"] and "quality_label" in info["formats"][0]:
