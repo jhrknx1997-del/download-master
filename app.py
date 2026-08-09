@@ -275,9 +275,10 @@ def process_formats(info: dict) -> list:
             "has_audio": True,
             "is_combined": is_combined,
             "need_merge": not is_combined,
-            "direct_url": url,
+            "direct_url": url or "",
             "sound_status": "Sound Supported" if is_combined else "Auto-Merged Sound",
         })
+
 
     # 2. Add Audio-Only (MP3) Format
     best_audio_format = None
