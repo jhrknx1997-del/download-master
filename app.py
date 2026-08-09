@@ -410,17 +410,9 @@ def process_formats(info: dict) -> list:
 def index():
     return INDEX_HTML
 
-@app.route("/api/debug_scraper")
-def debug_scraper():
-    v = request.args.get("v", "rLtCR7zc0mo")
-    res = custom_youtube_scraper(v)
-    return jsonify({
-        "result": res,
-        "formats_len": len(res.get("formats", [])) if res else 0
-    })
-
 @app.route("/api/info", methods=["GET"])
 def api_info():
+
 
     url = clean_url(request.args.get("url", ""))
     if not url:
