@@ -266,7 +266,7 @@ def api_info():
     })
 
 # ⚡ Server Stream Proxy Endpoint (Solves HTTP 403 Forbidden by matching Server IP with &ip= parameter)
-@app.route("/api/stream", methods=["GET"])
+@app.route("/api/stream", methods=["GET", "HEAD"])
 def api_stream():
     stream_url = request.args.get("url", "")
     filename = request.args.get("filename", "video.mp4")
@@ -281,7 +281,6 @@ def api_stream():
 
     try:
         r = requests.get(stream_url, headers=req_headers, stream=True, timeout=15)
-
         
         response_headers = {
             "Content-Type": r.headers.get("Content-Type", "video/mp4"),
@@ -296,6 +295,9 @@ def api_stream():
             
         status_code = r.status_code if r.status_code in (200, 206) else 200
 
+        if request.method == "HEAD":
+            return Response("", status=status_code, headers=response_headers)
+
         def generate():
             for chunk in r.iter_content(chunk_size=65536):
                 if chunk:
@@ -304,6 +306,7 @@ def api_stream():
         return Response(generate(), status=status_code, headers=response_headers)
     except Exception:
         return redirect(stream_url)
+
 
 @app.route("/api/download", methods=["GET"])
 @app.route("/api/direct", methods=["GET"])
@@ -423,14 +426,12 @@ INDEX_HTML = """<!DOCTYPE html>
                     const item = document.createElement('div');
                     item.className = 'format-item';
                     
-                    // ⚡ Client-side direct stream URL resolver (Client IP matches signed Google CDN URL)
-                    let targetUrl = f.direct_url;
-                    if (!targetUrl || targetUrl === '') {
-                        targetUrl = '/api/download?url=' + encodeURIComponent(url) + '&format_id=' + f.format_id;
-                    } else {
-                        // Use stream relay to ensure matching IP header
-                        targetUrl = '/api/stream?url=' + encodeURIComponent(f.direct_url) + '&filename=' + encodeURIComponent(data.title + '.' + f.ext);
+                    let rawStreamUrl = f.direct_url || f.url;
+                    let targetUrl = '/api/download?url=' + encodeURIComponent(url) + '&format_id=' + f.format_id;
+                    if (rawStreamUrl && rawStreamUrl !== '') {
+                        targetUrl = '/api/stream?url=' + encodeURIComponent(rawStreamUrl) + '&filename=' + encodeURIComponent(data.title + '.' + f.ext);
                     }
+
                     
                     item.innerHTML = `
                         <div class="format-desc">${f.quality_label} (${f.ext.toUpperCase()}) — ${f.sound_status}</div>
