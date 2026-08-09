@@ -23,12 +23,24 @@ app = Flask(__name__)
 
 # Discover FFmpeg binary path
 def resolve_ffmpeg():
-    if shutil.which("ffmpeg"):
-        return "ffmpeg"
+    which_path = shutil.which("ffmpeg")
+    if which_path:
+        return which_path
+    for path in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/avconv"]:
+        if os.path.exists(path):
+            return path
     try:
-        return imageio_ffmpeg.get_ffmpeg_exe()
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        if exe and os.path.exists(exe):
+            if os.name != "nt":
+                try:
+                    os.chmod(exe, 0o755)
+                except Exception:
+                    pass
+            return exe
     except Exception:
-        return "ffmpeg"
+        pass
+    return "ffmpeg"
 
 FFMPEG_EXE = resolve_ffmpeg()
 
