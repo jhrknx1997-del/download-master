@@ -209,10 +209,18 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                     label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
                     raw_sz = int(f.get("contentLength", 0))
                     
-                    # Accurate combined size calculation (Video + Audio)
-                    bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
-                    est_sz = int((bitrate_map.get(h, 50*1024) + 16*1024) * duration_sec)
-                    final_sz = (raw_sz + best_audio_sz) if (raw_sz > 5*1024*1024 or h <= 360) else est_sz
+                    # Always combine video size + audio size, OR use estimated duration size if raw video size is unrealistically small
+                    if h >= 1080 and raw_sz < 10 * 1024 * 1024:
+                        final_sz = est_sz
+                    elif h >= 720 and raw_sz < 5 * 1024 * 1024:
+                        final_sz = est_sz
+                    elif h >= 480 and raw_sz < 2 * 1024 * 1024:
+                        final_sz = est_sz
+                    elif raw_sz > 0:
+                        final_sz = raw_sz + best_audio_sz
+                    else:
+                        final_sz = est_sz
+
 
                     formats.append({
                         "format_id": str(f.get("itag", h)),
