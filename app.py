@@ -1,6 +1,6 @@
 """
-SnapFetch Pro v5.1 — Snaptube-Architecture Hybrid Media Downloader Engine
-Ultra-Fast Mobile Session Scraper + Sound-Supported Auto-Merging Video/Audio Pipeline.
+SnapFetch Pro v5.1 — Snaptube-Architecture High Performance Media Downloader Engine
+Fully Sound-Supported Auto-Merging Video/Audio Pipeline with Zero-Leak Temp File Cleanup & RFC 5987 UTF-8 Headers.
 """
 
 import os
@@ -8,7 +8,6 @@ import re
 import glob
 import time
 import uuid
-import json
 import tempfile
 import hashlib
 import threading
@@ -16,7 +15,7 @@ import imageio_ffmpeg
 import requests
 import yt_dlp
 from cachetools import TTLCache
-from urllib.parse import quote, unquote, parse_qs
+from urllib.parse import quote, unquote
 from flask import Flask, Response, jsonify, request, stream_with_context, redirect
 
 app = Flask(__name__)
@@ -49,9 +48,20 @@ for p in RAW_PROXIES:
     parts = p.split(":")
     PROXIES.append(f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}")
 
-def get_random_proxy():
-    import random
-    return random.choice(PROXIES)
+_proxy_counter = 0
+
+def get_proxy_sequence():
+    """ Returns proxies ordered sequentially starting from the current round-robin index, followed by None (direct). """
+    global _proxy_counter
+    start_idx = _proxy_counter
+    _proxy_counter += 1
+    
+    seq = []
+    n = len(PROXIES)
+    for i in range(n):
+        seq.append(PROXIES[(start_idx + i) % n])
+    seq.append(None) # Direct fallback at the end
+    return seq
 
 YDL_BASE_OPTS = {
     "quiet": True,
@@ -69,37 +79,6 @@ YDL_BASE_OPTS = {
     }
 }
 
-
-def extract_metadata(url: str) -> dict:
-    url = clean_url(url)
-    
-    # 1. For YouTube links, ALWAYS return custom_youtube_scraper (bypasses bot login gate completely)
-    if "youtube.com" in url or "youtu.be" in url:
-        scraped = custom_youtube_scraper(url)
-        if scraped:
-            return scraped
-
-    # 2. For TikTok, Instagram, Facebook, X, Reddit, use yt_dlp
-    opts = dict(YDL_BASE_OPTS)
-    if "tiktok.com" in url:
-        opts["format"] = "best"
-
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-        if info:
-            return info
-    except Exception:
-        pass
-
-    return None
-
-
-
-
-
-
-
 PLATFORM_PATTERNS = {
     "youtube": r"(youtube\.com|youtu\.be)",
     "tiktok": r"(tiktok\.com|vt\.tiktok\.com)",
@@ -110,28 +89,6 @@ PLATFORM_PATTERNS = {
     "vimeo": r"vimeo\.com",
     "pinterest": r"pinterest\.com",
 }
-
-_session = None
-
-def get_session():
-    global _session
-    if _session is None:
-        _session = requests.Session()
-        _session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-        })
-        try:
-            _session.get("https://www.youtube.com/", timeout=5)
-        except Exception:
-            pass
-        _session.cookies.set("CONSENT", "PENDING+987", domain=".youtube.com")
-        _session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
-    return _session
-
-def reset_session():
-    global _session
-    _session = None
 
 def detect_platform(url: str) -> str:
     for name, pattern in PLATFORM_PATTERNS.items():
@@ -172,28 +129,21 @@ def format_duration(seconds):
 USER_AGENTS = [
     "Mozilla/5.0 (Linux; Android 12; Pixel 6 Build/SQ3A.220705.004) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (Linux; Android 11; Samsung Galaxy S21) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
 ]
 
 def custom_youtube_scraper(url_or_id: str) -> dict:
+    from urllib.parse import parse_qs
     try:
         match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
         vid = match.group(1) if match else url_or_id
 
-        # Try fast direct connection first, followed by residential proxy nodes
-        sessions = [
-            (requests.Session(), None), # Direct Connection
-        ]
-        for _ in range(3):
-            p = get_random_proxy()
-            s = requests.Session()
-            s.proxies = {"http": p, "https": p}
-            sessions.append((s, p))
-
-        for session, p_used in sessions:
-            for ua in USER_AGENTS[:2]:
+        # Try direct first, then proxy nodes sequentially
+        for proxy in get_proxy_sequence():
+            for ua in USER_AGENTS:
                 try:
+                    session = requests.Session()
+                    if proxy:
+                        session.proxies = {"http": proxy, "https": proxy}
                     session.headers.update({
                         "User-Agent": ua,
                         "Accept-Language": "en-US,en;q=0.9",
@@ -201,7 +151,7 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                     session.cookies.set("CONSENT", "PENDING+987", domain=".youtube.com")
                     session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
 
-                    res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=4)
+                    res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=3.5)
                     if res.status_code != 200:
                         continue
 
@@ -251,7 +201,6 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                         bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
                         est_sz = int((bitrate_map.get(h, 50*1024) + 16*1024) * duration_sec)
 
-                        # Always combine video size + audio size, OR use estimated duration size if raw video size is unrealistically small
                         if h >= 1080 and raw_sz < 10 * 1024 * 1024:
                             final_sz = est_sz
                         elif h >= 720 and raw_sz < 5 * 1024 * 1024:
@@ -344,18 +293,59 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
     except Exception:
         return None
 
+def extract_metadata(url: str) -> dict:
+    url = clean_url(url)
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    if key in info_cache:
+        return info_cache[key]
+    
+    # 1. For YouTube links, use custom_youtube_scraper first
+    if "youtube.com" in url or "youtu.be" in url:
+        scraped = custom_youtube_scraper(url)
+        if scraped:
+            info_cache[key] = scraped
+            return scraped
+
+    # 2. For TikTok, Instagram, Facebook, X, Reddit, Pinterest, Vimeo, fallback to yt_dlp with sequential proxy failover
+    for proxy in get_proxy_sequence():
+        opts = dict(YDL_BASE_OPTS)
+        if proxy:
+            opts["proxy"] = proxy
+        if "tiktok.com" in url:
+            opts["format"] = "best"
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if info:
+                info_cache[key] = info
+                return info
+        except Exception:
+            continue
+
+    return None
 
 
+def format_filesize(bytes_val):
+    if not bytes_val or bytes_val <= 0:
+        return "Auto / Variable"
+    mb = bytes_val / (1024 * 1024)
+    if mb >= 1024:
+        return f"{mb / 1024:.2f} GB"
+    if mb >= 1:
+        return f"{mb:.1f} MB"
+    return f"{bytes_val / 1024:.0f} KB"
 
-
-
-
-
+def format_duration(seconds):
+    if not seconds:
+        return ""
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
 
 def process_formats(info: dict) -> list:
-    if "formats" in info and isinstance(info["formats"], list) and info["formats"] and "quality_label" in info["formats"][0]:
-        return info["formats"]
-
     raw_formats = info.get("formats") or []
     processed = []
     seen_heights = set()
@@ -440,8 +430,6 @@ def index():
 
 @app.route("/api/info", methods=["GET"])
 def api_info():
-
-
     url = clean_url(request.args.get("url", ""))
     if not url:
         return jsonify({"success": False, "error": "Please provide a valid media URL."}), 400
@@ -494,7 +482,7 @@ def api_direct():
     if format_id:
         target = next((f for f in formats if str(f.get("format_id")) == str(format_id)), None)
     
-    direct_url = target.get("direct_url") if target else (target.get("url") if target else None)
+    direct_url = target.get("url") if target else info.get("url")
     if not direct_url:
         return jsonify({"error": "Direct stream URL not found"}), 404
 
@@ -562,45 +550,53 @@ def bg_download_task(job_id, url, format_id):
             job["status"] = "merging"
             job["percent"] = 99.0
 
-    dl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "ffmpeg_location": FFMPEG_EXE,
-        "format": format_spec,
-        "outtmpl": out_template,
-        "merge_output_format": "mp4" if not is_mp3 else None,
-        "postprocessors": postprocessors,
-        "progress_hooks": [progress_hook],
-        "proxy": get_random_proxy(),
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    }
+    success = False
+    for proxy in get_proxy_sequence():
+        dl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "ffmpeg_location": FFMPEG_EXE,
+            "format": format_spec,
+            "outtmpl": out_template,
+            "merge_output_format": "mp4" if not is_mp3 else None,
+            "postprocessors": postprocessors,
+            "progress_hooks": [progress_hook],
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        }
+        if proxy:
+            dl_opts["proxy"] = proxy
 
+        try:
+            with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                ydl.download([url])
+            success = True
+            break
+        except Exception:
+            continue
 
-    try:
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            ydl.download([url])
-
-        downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
-        if not downloaded_files:
-            job["status"] = "error"
-            job["error"] = "Failed to download/merge video stream."
-            return
-
-        filepath = downloaded_files[0]
-        filesize = os.path.getsize(filepath)
-
-        job["status"] = "ready"
-        job["percent"] = 100.0
-        job["filepath"] = filepath
-        job["temp_dir"] = temp_dir
-        job["ascii_filename"] = ascii_filename
-        job["encoded_filename"] = encoded_filename
-        job["filesize"] = filesize
-        job["is_mp3"] = is_mp3
-
-    except Exception as e:
+    if not success:
         job["status"] = "error"
-        job["error"] = str(e)
+        job["error"] = "Failed to download media stream after proxy failover retries."
+        return
+
+    downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
+    if not downloaded_files:
+        job["status"] = "error"
+        job["error"] = "Failed to download/merge video stream."
+        return
+
+    filepath = downloaded_files[0]
+    filesize = os.path.getsize(filepath)
+
+    job["status"] = "ready"
+    job["percent"] = 100.0
+    job["filepath"] = filepath
+    job["temp_dir"] = temp_dir
+    job["ascii_filename"] = ascii_filename
+    job["encoded_filename"] = encoded_filename
+    job["filesize"] = filesize
+    job["is_mp3"] = is_mp3
+
 
 
 @app.route("/api/start_download", methods=["GET"])
@@ -629,16 +625,10 @@ def api_start_download():
 
 
 @app.route("/api/download", methods=["GET"])
-@app.route("/api/stream", methods=["GET"])
 def api_download():
     """ Direct stream download endpoint for browser links """
     url = clean_url(request.args.get("url", ""))
     format_id = request.args.get("format_id", "").strip()
-    direct_stream_url = request.args.get("url", "")
-    
-    if direct_stream_url and direct_stream_url.startswith("http") and "googlevideo.com" in direct_stream_url:
-        return redirect(direct_stream_url)
-
     if not url:
         return jsonify({"error": "Missing URL"}), 400
 
@@ -675,24 +665,39 @@ def api_download():
         format_spec = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
         postprocessors = []
 
-    dl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "ffmpeg_location": FFMPEG_EXE,
-        "format": format_spec,
-        "outtmpl": out_template,
-        "merge_output_format": "mp4" if not is_mp3 else None,
-        "postprocessors": postprocessors,
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    }
+    success = False
+    for proxy in get_proxy_sequence():
+        dl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "ffmpeg_location": FFMPEG_EXE,
+            "format": format_spec,
+            "outtmpl": out_template,
+            "merge_output_format": "mp4" if not is_mp3 else None,
+            "postprocessors": postprocessors,
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        }
+        if proxy:
+            dl_opts["proxy"] = proxy
 
-    try:
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            ydl.download([url])
+        try:
+            with yt_dlp.YoutubeDL(dl_opts) as ydl:
+                ydl.download([url])
+            success = True
+            break
+        except Exception:
+            continue
 
-        downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
-        if not downloaded_files:
-            return jsonify({"error": "Failed to download/merge video stream."}), 500
+    if not success:
+        direct_url = info.get("url")
+        if direct_url:
+            return redirect(direct_url)
+        return jsonify({"error": "Failed to download media stream after proxy failover retries."}), 502
+
+    downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
+    if not downloaded_files:
+        return jsonify({"error": "Failed to download/merge video stream."}), 500
+
 
         filepath = downloaded_files[0]
         filesize = os.path.getsize(filepath)
@@ -724,12 +729,6 @@ def api_download():
             headers=response_headers,
         )
 
-    except Exception as e:
-        formats = info.get("formats", [])
-        direct_url = formats[0].get("direct_url") if formats else info.get("url")
-        if direct_url:
-            return redirect(direct_url)
-        return jsonify({"error": f"Download error: {str(e)}"}), 502
 
 
 @app.route("/api/job_status/<job_id>", methods=["GET"])
@@ -1234,6 +1233,7 @@ INDEX_HTML = """<!DOCTYPE html>
     transform: translateY(-1px);
   }
 
+  /* Progress Box Card */
   .progress-card {
     display: none;
     margin-top: 20px;
@@ -1676,6 +1676,6 @@ async function startDownloadWithProgress(startUrl, qualityLabel, formatExt) {
 """
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print(f"[SnapFetch] Starting Sound-Supported Downloader Server on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
+    print(f"[SnapFetch] Starting Sound-Supported Downloader Server with FFmpeg: {FFMPEG_EXE}")
+    print("[SnapFetch] Server live on http://localhost:5000")
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
