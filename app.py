@@ -698,36 +698,36 @@ def api_download():
     if not downloaded_files:
         return jsonify({"error": "Failed to download/merge video stream."}), 500
 
+    filepath = downloaded_files[0]
+    filesize = os.path.getsize(filepath)
 
-        filepath = downloaded_files[0]
-        filesize = os.path.getsize(filepath)
+    response_headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+        "Content-Type": "audio/mpeg" if is_mp3 else "video/mp4",
+        "Content-Length": str(filesize),
+        "Accept-Ranges": "bytes",
+    }
 
-        response_headers = {
-            "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}',
-            "Content-Type": "audio/mpeg" if is_mp3 else "video/mp4",
-            "Content-Length": str(filesize),
-            "Accept-Ranges": "bytes",
-        }
-
-        def generate_file_and_cleanup():
+    def generate_file_and_cleanup():
+        try:
+            with open(filepath, "rb") as f:
+                while chunk := f.read(512 * 1024):
+                    yield chunk
+        finally:
             try:
-                with open(filepath, "rb") as f:
-                    while chunk := f.read(512 * 1024):
-                        yield chunk
-            finally:
-                try:
-                    if os.path.exists(filepath):
-                        os.remove(filepath)
-                    if os.path.exists(temp_dir):
-                        os.rmdir(temp_dir)
-                except Exception:
-                    pass
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                if os.path.exists(temp_dir):
+                    os.rmdir(temp_dir)
+            except Exception:
+                pass
 
-        return Response(
-            stream_with_context(generate_file_and_cleanup()),
-            status=200,
-            headers=response_headers,
-        )
+    return Response(
+        stream_with_context(generate_file_and_cleanup()),
+        status=200,
+        headers=response_headers,
+    )
+
 
 
 
