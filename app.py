@@ -308,12 +308,15 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                         "formats": formats,
                     }
 
-            except Exception:
+            except Exception as e:
+                print(f"[SCRAPER_ERR] {e}", flush=True)
                 continue
 
         return None
-    except Exception:
+    except Exception as e:
+        print(f"[SCRAPER_FATAL_ERR] {e}", flush=True)
         return None
+
 
 
 
