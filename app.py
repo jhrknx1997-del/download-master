@@ -38,6 +38,57 @@ info_cache: TTLCache = TTLCache(maxsize=3000, ttl=900)
 # Global dictionary to track active background download jobs
 download_jobs = {}
 
+RAW_PROXIES = [
+    "31.59.20.176:6754:ycbfzlos:qh3lq7jr89uw",
+    "31.56.127.193:7684:ycbfzlos:qh3lq7jr89uw",
+    "45.38.107.97:6014:ycbfzlos:qh3lq7jr89uw",
+    "198.105.121.200:6462:ycbfzlos:qh3lq7jr89uw",
+    "64.137.96.74:6641:ycbfzlos:qh3lq7jr89uw",
+    "198.23.243.226:6361:ycbfzlos:qh3lq7jr89uw",
+    "38.154.185.97:6370:ycbfzlos:qh3lq7jr89uw",
+    "84.247.60.125:6095:ycbfzlos:qh3lq7jr89uw",
+    "142.111.67.146:5611:ycbfzlos:qh3lq7jr89uw",
+    "191.96.254.138:6185:ycbfzlos:qh3lq7jr89uw",
+]
+
+def parse_proxy(proxy_str):
+    parts = proxy_str.split(":")
+    if len(parts) == 4:
+        ip, port, user, pwd = parts
+        return f"http://{user}:{pwd}@{ip}:{port}"
+    return None
+
+PROXIES = [p for p in (parse_proxy(s) for s in RAW_PROXIES) if p]
+
+class ProxyManager:
+    def __init__(self, proxy_list):
+        self.proxies = list(proxy_list)
+        self.index = 0
+        self.lock = threading.Lock()
+        self.failures = {p: 0 for p in self.proxies}
+
+    def get_proxy(self):
+        if not self.proxies:
+            return None
+        with self.lock:
+            healthy = [p for p in self.proxies if self.failures[p] < 5]
+            candidates = healthy if healthy else self.proxies
+            proxy = candidates[self.index % len(candidates)]
+            self.index += 1
+            return proxy
+
+    def report_failure(self, proxy):
+        if proxy and proxy in self.failures:
+            with self.lock:
+                self.failures[proxy] += 1
+
+    def report_success(self, proxy):
+        if proxy and proxy in self.failures:
+            with self.lock:
+                self.failures[proxy] = max(0, self.failures[proxy] - 1)
+
+proxy_manager = ProxyManager(PROXIES)
+
 YDL_BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
@@ -85,16 +136,49 @@ def extract_metadata(url: str) -> dict:
     if key in info_cache:
         return info_cache[key]
     
-    opts = dict(YDL_BASE_OPTS)
+    platform = detect_platform(url)
+    is_youtube = platform == "youtube"
+
+    base_opts = dict(YDL_BASE_OPTS)
     if "tiktok.com" in url:
-        opts["format"] = "best"
+        base_opts["format"] = "best"
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    if is_youtube:
+        base_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["android", "ios", "web"],
+                "player_skip": ["js", "configs"]
+            }
+        }
 
-    if info:
-        info_cache[key] = info
-    return info
+    attempts = 3 if is_youtube else 2
+    last_error = None
+
+    for attempt in range(attempts):
+        opts = dict(base_opts)
+        use_proxy = is_youtube or (attempt > 0)
+        proxy_url = proxy_manager.get_proxy() if use_proxy else None
+        
+        if proxy_url:
+            opts["proxy"] = proxy_url
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            if info:
+                if proxy_url:
+                    proxy_manager.report_success(proxy_url)
+                info_cache[key] = info
+                return info
+        except Exception as e:
+            last_error = e
+            if proxy_url:
+                proxy_manager.report_failure(proxy_url)
+            continue
+
+    if last_error:
+        raise last_error
+    return None
 
 def format_filesize(bytes_val):
     if not bytes_val or bytes_val <= 0:
@@ -332,6 +416,10 @@ def bg_download_task(job_id, url, format_id):
         "progress_hooks": [progress_hook],
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     }
+    
+    active_proxy = proxy_manager.get_proxy()
+    if active_proxy:
+        dl_opts["proxy"] = active_proxy
 
     try:
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
@@ -437,6 +525,10 @@ def api_download():
         "postprocessors": postprocessors,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     }
+
+    active_proxy = proxy_manager.get_proxy()
+    if active_proxy:
+        dl_opts["proxy"] = active_proxy
 
     try:
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
