@@ -591,6 +591,10 @@ def api_job_status(job_id):
 def api_get_file(job_id):
     job = download_jobs.get(job_id)
     if not job or job.get("status") != "ready":
+        url = clean_url(request.args.get("url", ""))
+        format_id = request.args.get("format_id", "").strip()
+        if url:
+            return redirect(f"/api/download?url={quote(url)}&format_id={quote(format_id)}")
         return jsonify({"error": "File not ready"}), 400
 
     filepath = job["filepath"]
@@ -1421,10 +1425,10 @@ function renderFormats(filter) {
         </div>
       </div>
       <div style="display: flex; gap: 6px;">
-        <button class="btn-dl" onclick="startDownloadWithProgress('${startUrl.replace(/'/g, "\\'")}', '${qualityEscaped}', '${f.ext}')">
+        <a href="${directDlUrl}" class="btn-dl" download title="Download with Sound">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
           Download with Sound
-        </button>
+        </a>
         <a href="${directDlUrl}" class="btn-dl" style="background: transparent; border: 1px solid var(--primary-amber); color: var(--primary-amber);" download title="Direct Stream Link">
           Direct
         </a>
@@ -1498,8 +1502,8 @@ async function startDownloadWithProgress(startUrl, qualityLabel, formatExt) {
           progressPct.textContent = '100%';
           progressSpeed.textContent = 'Saved to Device!';
 
-          // Trigger automatic instant browser file download
-          window.location.href = '/api/get_file/' + jobId;
+          // Trigger automatic instant browser file download with fallback URL
+          window.location.href = '/api/get_file/' + jobId + '?url=' + encodeURIComponent(urlInput.value.trim()) + '&format_id=' + encodeURIComponent(formatId || '');
 
         } else if (job.status === 'error') {
           clearInterval(pollInterval);
