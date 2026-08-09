@@ -212,13 +212,8 @@ def get_oembed_fallback(url: str) -> dict:
 
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    if key in info_cache and info_cache[key].get("formats", [{}])[0].get("direct_url"):
-        return info_cache[key]
-    
     scraped = custom_youtube_web_scraper(url)
-    if scraped and scraped.get("formats", [{}])[0].get("direct_url"):
-        info_cache[key] = scraped
+    if scraped and scraped.get("formats") and scraped["formats"][0].get("direct_url"):
         return scraped
 
     fallback = get_oembed_fallback(url)
@@ -226,6 +221,7 @@ def extract_metadata(url: str) -> dict:
         return fallback
         
     raise Exception("Failed to resolve video stream.")
+
 
 
 def format_filesize(bytes_val):
