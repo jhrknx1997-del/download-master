@@ -1,0 +1,9 @@
+{
+  "providers": ["python"],
+  "pkgs": ["ffmpeg"],
+  "phases": {
+    "setup": {
+      "nixPkgs": ["ffmpeg", "python311"]
+    }
+  }
+}
