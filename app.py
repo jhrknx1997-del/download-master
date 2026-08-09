@@ -9,7 +9,8 @@ import json
 import time
 import hashlib
 import requests
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, parse_qs
+
 from flask import Flask, Response, jsonify, request, redirect
 
 app = Flask(__name__)
@@ -115,6 +116,12 @@ def custom_youtube_web_scraper(url_or_id: str) -> dict:
         # 1. Process Video Formats
         for f in raw_formats:
             direct_url = f.get("url")
+            if not direct_url and f.get("cipher"):
+                cipher_data = parse_qs(f.get("cipher"))
+                direct_url = cipher_data.get("url", [""])[0]
+            if not direct_url and f.get("signatureCipher"):
+                cipher_data = parse_qs(f.get("signatureCipher"))
+                direct_url = cipher_data.get("url", [""])[0]
             if not direct_url:
                 continue
                 
@@ -151,12 +158,19 @@ def custom_youtube_web_scraper(url_or_id: str) -> dict:
         best_audio_size = 0
         for f in raw_formats:
             direct_url = f.get("url")
+            if not direct_url and f.get("cipher"):
+                cipher_data = parse_qs(f.get("cipher"))
+                direct_url = cipher_data.get("url", [""])[0]
+            if not direct_url and f.get("signatureCipher"):
+                cipher_data = parse_qs(f.get("signatureCipher"))
+                direct_url = cipher_data.get("url", [""])[0]
             mime = f.get("mimeType", "")
             if direct_url and "audio" in mime:
                 sz = int(f.get("contentLength", 0))
                 if sz >= best_audio_size:
                     best_audio_size = sz
                     best_audio_url = direct_url
+
                     
         if best_audio_url:
             processed_formats.append({
