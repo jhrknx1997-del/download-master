@@ -40,6 +40,7 @@ YDL_BASE_OPTS = {
     "no_warnings": True,
     "skip_download": True,
     "noplaylist": True,
+    "cachedir": False,
     "socket_timeout": 15,
     "allow_unplayable_formats": False,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -319,6 +320,7 @@ def bg_download_task(job_id, url, format_id):
     dl_opts = {
         "quiet": True,
         "no_warnings": True,
+        "cachedir": False,
         "ffmpeg_location": FFMPEG_EXE,
         "format": format_spec,
         "outtmpl": out_template,
@@ -424,6 +426,7 @@ def api_download():
     dl_opts = {
         "quiet": True,
         "no_warnings": True,
+        "cachedir": False,
         "ffmpeg_location": FFMPEG_EXE,
         "format": format_spec,
         "outtmpl": out_template,
