@@ -26,7 +26,6 @@ try:
 except Exception:
     FFMPEG_EXE = "ffmpeg"
 
-
 # In-memory cache for extracted metadata (15 minute TTL, up to 3000 items)
 info_cache: TTLCache = TTLCache(maxsize=3000, ttl=900)
 
@@ -52,19 +51,17 @@ for p in RAW_PROXIES:
     parts = p.split(":")
     PROXIES.append(f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}")
 
-_proxy_counter = 0
+_proxy_idx = 0
 
-def get_proxy_sequence():
-    """ Returns proxies ordered sequentially starting from the current round-robin index, followed by None (direct). """
-    global _proxy_counter
-    start_idx = _proxy_counter
-    _proxy_counter += 1
-    
+def get_proxy_list():
+    global _proxy_idx
     seq = []
     n = len(PROXIES)
+    start = _proxy_idx
+    _proxy_idx += 1
     for i in range(n):
-        seq.append(PROXIES[(start_idx + i) % n])
-    seq.append(None) # Direct fallback at the end
+        seq.append(PROXIES[(start + i) % n])
+    seq.append(None)
     return seq
 
 YDL_BASE_OPTS = {
@@ -104,6 +101,7 @@ def clean_url(url: str) -> str:
     if not url:
         return ""
     url = url.strip()
+    # Unquote double encoded URLs (e.g. watch%3Dv%3D)
     while "%" in url:
         decoded = unquote(url)
         if decoded == url:
@@ -111,219 +109,14 @@ def clean_url(url: str) -> str:
         url = decoded
     return url
 
-def format_filesize(bytes_val):
-    if not bytes_val or bytes_val <= 0:
-        return "Auto / Variable"
-    mb = bytes_val / (1024 * 1024)
-    if mb >= 1024:
-        return f"{mb / 1024:.2f} GB"
-    if mb >= 1:
-        return f"{mb:.1f} MB"
-    return f"{bytes_val / 1024:.0f} KB"
-
-def format_duration(seconds):
-    if not seconds:
-        return ""
-    m, s = divmod(int(seconds), 60)
-    h, m = divmod(m, 60)
-    if h > 0:
-        return f"{h}:{m:02d}:{s:02d}"
-    return f"{m}:{s:02d}"
-
-USER_AGENTS = [
-    "Mozilla/5.0 (Linux; Android 12; Pixel 6 Build/SQ3A.220705.004) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
-]
-
-def custom_youtube_scraper(url_or_id: str) -> dict:
-    from urllib.parse import parse_qs
-    try:
-        match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
-        vid = match.group(1) if match else url_or_id
-
-        data = None
-        details = {}
-        for proxy in get_proxy_sequence()[:2]:
-            for ua in USER_AGENTS[:1]:
-                try:
-                    session = requests.Session()
-                    if proxy:
-                        session.proxies = {"http": proxy, "https": proxy}
-                    session.headers.update({
-                        "User-Agent": ua,
-                        "Accept-Language": "en-US,en;q=0.9",
-                    })
-                    session.cookies.set("CONSENT", "PENDING+987", domain=".youtube.com")
-                    session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
-
-                    res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=2.5)
-
-                    if res.status_code != 200:
-                        continue
-
-                    for s in re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL):
-                        if 'streamingData' in s and 'videoDetails' in s:
-                            i, j = s.find('{'), s.rfind('}')
-                            if i != -1 and j != -1:
-                                try:
-                                    data = json.loads(s[i:j+1])
-                                    break
-                                except Exception:
-                                    pass
-                    if data:
-                        break
-                except Exception:
-                    continue
-            if data:
-                break
-
-        if data:
-            details = data.get("videoDetails", {})
-            streaming = data.get("streamingData", {})
-            raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
-        else:
-            raw = []
-
-        title = details.get("title") or f"YouTube Video ({vid})"
-        uploader = details.get("author") or "YouTube Creator"
-        duration_sec = int(details.get("lengthSeconds", 0)) or 180
-        thumb = details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg")
-
-        formats, seen, best_audio, best_audio_sz = [], set(), None, 0
-
-        for f in raw:
-            u = f.get("url")
-            cipher_str = f.get("signatureCipher") or f.get("cipher")
-            if not u and cipher_str:
-                u = parse_qs(cipher_str).get("url", [""])[0]
-            if not u: continue
-
-            h = f.get("height") or 0
-            mime = f.get("mimeType", "")
-
-            if "audio" in mime:
-                sz = int(f.get("contentLength", 0))
-                if sz >= best_audio_sz:
-                    best_audio, best_audio_sz = u, sz
-                continue
-                
-            if h <= 0 or h in seen: continue
-            seen.add(h)
-            label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
-            raw_sz = int(f.get("contentLength", 0))
-            
-            bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
-            est_sz = int((bitrate_map.get(h, 50*1024) + 16*1024) * duration_sec)
-
-            if h >= 1080 and raw_sz < 10 * 1024 * 1024:
-                final_sz = est_sz
-            elif h >= 720 and raw_sz < 5 * 1024 * 1024:
-                final_sz = est_sz
-            elif h >= 480 and raw_sz < 2 * 1024 * 1024:
-                final_sz = est_sz
-            elif raw_sz > 0:
-                final_sz = raw_sz + best_audio_sz
-            else:
-                final_sz = est_sz
-
-            formats.append({
-                "format_id": str(f.get("itag", h)),
-                "ext": "mp4",
-                "height": h,
-                "quality_label": label,
-                "filesize": final_sz,
-                "filesize_human": format_filesize(final_sz),
-                "has_video": True,
-                "has_audio": True,
-                "is_combined": True,
-                "need_merge": False,
-                "direct_url": u,
-                "url": u,
-                "sound_status": "Sound Supported",
-                "vcodec": "avc1",
-                "acodec": "mp4a",
-            })
-
-        STANDARD_QUALITIES = [
-            (1080, "1080p Full HD", "137"),
-            (720, "720p HD", "22"),
-            (480, "480p", "135"),
-            (360, "360p", "18"),
-            (240, "240p", "133"),
-            (144, "144p", "160"),
-        ]
-        for req_h, req_label, req_fid in STANDARD_QUALITIES:
-            if req_h not in seen:
-                seen.add(req_h)
-                bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
-                est_sz = int((bitrate_map.get(req_h, 50*1024) + 16*1024) * duration_sec)
-                formats.append({
-                    "format_id": req_fid,
-                    "ext": "mp4",
-                    "height": req_h,
-                    "quality_label": req_label,
-                    "filesize": est_sz,
-                    "filesize_human": format_filesize(est_sz),
-                    "has_video": True,
-                    "has_audio": True,
-                    "is_combined": False,
-                    "need_merge": True,
-                    "direct_url": "",
-                    "url": "",
-                    "sound_status": "Sound Supported",
-                    "vcodec": "avc1",
-                    "acodec": "mp4a",
-                })
-
-        audio_final_sz = best_audio_sz or int(16 * 1024 * duration_sec)
-        if best_audio or not any(f["format_id"] == "bestaudio" for f in formats):
-            formats.append({
-                "format_id": "bestaudio",
-                "ext": "mp3",
-                "height": 0,
-                "quality_label": "MP3 Audio (High Quality)",
-                "filesize": audio_final_sz,
-                "filesize_human": format_filesize(audio_final_sz),
-                "has_video": False,
-                "has_audio": True,
-                "is_combined": False,
-                "need_merge": True,
-                "direct_url": best_audio or "",
-                "url": best_audio or "",
-                "sound_status": "Audio MP3",
-                "vcodec": "none",
-                "acodec": "mp3",
-            })
-
-        formats.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
-        return {
-            "id": vid,
-            "title": title,
-            "uploader": uploader,
-            "thumbnail": thumb,
-            "duration": duration_sec,
-            "webpage_url": f"https://www.youtube.com/watch?v={vid}",
-            "formats": formats,
-        }
-    except Exception:
-        return None
-
-
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
     key = hashlib.sha256(url.encode("utf-8")).hexdigest()
     if key in info_cache:
         return info_cache[key]
     
-    # 1. For YouTube links, use custom_youtube_scraper first
-    if "youtube.com" in url or "youtu.be" in url:
-        scraped = custom_youtube_scraper(url)
-        if scraped:
-            info_cache[key] = scraped
-            return scraped
-
-    # 2. For TikTok, Instagram, Facebook, X, Reddit, Pinterest, Vimeo, fallback to yt_dlp with sequential proxy failover (max 3 nodes for sub-5s speed)
-    for proxy in get_proxy_sequence()[:3]:
+    # Try proxies sequentially
+    for proxy in get_proxy_list():
         opts = dict(YDL_BASE_OPTS)
         if proxy:
             opts["proxy"] = proxy
@@ -338,7 +131,6 @@ def extract_metadata(url: str) -> dict:
                 return info
         except Exception:
             continue
-
 
     return None
 
@@ -364,14 +156,8 @@ def format_duration(seconds):
 
 def process_formats(info: dict) -> list:
     raw_formats = info.get("formats") or []
-    if raw_formats and isinstance(raw_formats, list):
-        first = raw_formats[0]
-        if "quality_label" in first or "has_video" in first:
-            return raw_formats
-
     processed = []
     seen_heights = set()
-
 
     best_audio_size = 0
     for f in raw_formats:
@@ -571,10 +357,8 @@ def bg_download_task(job_id, url, format_id):
             
         elif status == "finished":
             job["status"] = "merging"
-            job["percent"] = 99.0
-
     success = False
-    for proxy in get_proxy_sequence():
+    for proxy in get_proxy_list():
         dl_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -689,7 +473,7 @@ def api_download():
         postprocessors = []
 
     success = False
-    for proxy in get_proxy_sequence():
+    for proxy in get_proxy_list():
         dl_opts = {
             "quiet": True,
             "no_warnings": True,
@@ -712,10 +496,7 @@ def api_download():
             continue
 
     if not success:
-        direct_url = info.get("url")
-        if direct_url:
-            return redirect(direct_url)
-        return jsonify({"error": "Failed to download media stream after proxy failover retries."}), 502
+        return jsonify({"error": "Failed to download video stream."}), 500
 
     downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
     if not downloaded_files:
@@ -723,6 +504,7 @@ def api_download():
 
     filepath = downloaded_files[0]
     filesize = os.path.getsize(filepath)
+
 
     response_headers = {
         "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}',
@@ -750,7 +532,6 @@ def api_download():
         status=200,
         headers=response_headers,
     )
-
 
 
 
@@ -1699,7 +1480,6 @@ async function startDownloadWithProgress(startUrl, qualityLabel, formatExt) {
 """
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    print(f"[SnapFetch] Starting Downloader Server on port {port} with FFmpeg: {FFMPEG_EXE}")
-    app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
-
+    print(f"[SnapFetch] Starting Sound-Supported Downloader Server with FFmpeg: {FFMPEG_EXE}")
+    print("[SnapFetch] Server live on http://localhost:5000")
+    app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
