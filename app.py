@@ -39,7 +39,38 @@ YDL_BASE_OPTS = {
     "allow_unplayable_formats": False,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "ffmpeg_location": FFMPEG_EXE,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["android", "ios", "mweb", "web", "tvhtml5"]
+        }
+    }
 }
+
+def extract_metadata(url: str) -> dict:
+    url = clean_url(url)
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    if key in info_cache:
+        return info_cache[key]
+    
+    # Tier 1: Try Custom Mobile Session Scraper FIRST for YouTube
+    if "youtube.com" in url or "youtu.be" in url:
+        scraped = custom_youtube_scraper(url)
+        if scraped and scraped.get("formats"):
+            info_cache[key] = scraped
+            return scraped
+
+    # Tier 2: Multi-client fallback using yt_dlp
+    opts = dict(YDL_BASE_OPTS)
+    if "tiktok.com" in url:
+        opts["format"] = "best"
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if info:
+        info_cache[key] = info
+    return info
+
 
 PLATFORM_PATTERNS = {
     "youtube": r"(youtube\.com|youtu\.be)",
@@ -228,28 +259,7 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
         return None
 
 
-def extract_metadata(url: str) -> dict:
-    url = clean_url(url)
-    
-    # 1. For YouTube links, ALWAYS use Custom Mobile Session Scraper (0 Bot Blocks)
-    if "youtube.com" in url or "youtu.be" in url:
-        return custom_youtube_scraper(url)
 
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    if key in info_cache:
-        return info_cache[key]
-
-    # 2. Use yt_dlp for TikTok, Instagram, Facebook, X, Reddit
-    opts = dict(YDL_BASE_OPTS)
-    if "tiktok.com" in url:
-        opts["format"] = "best"
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-
-    if info:
-        info_cache[key] = info
-    return info
 
 
 
