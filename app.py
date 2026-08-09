@@ -20,9 +20,12 @@ from flask import Flask, Response, jsonify, request, stream_with_context, redire
 
 app = Flask(__name__)
 
-# Discover FFmpeg binary path safely
+# Discover FFmpeg binary path
 try:
-    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+    if os.name != "nt" and os.system("which ffmpeg > /dev/null 2>&1") == 0:
+        FFMPEG_EXE = "ffmpeg"
+    else:
+        FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
 except Exception:
     FFMPEG_EXE = "ffmpeg"
 
@@ -31,38 +34,6 @@ info_cache: TTLCache = TTLCache(maxsize=3000, ttl=900)
 
 # Global dictionary to track active background download jobs
 download_jobs = {}
-
-# High-Speed Residential Proxy Pool (10 Nodes)
-RAW_PROXIES = [
-    "31.59.20.176:6754:ycbfzlos:qh3lq7jr89uw",
-    "31.56.127.193:7684:ycbfzlos:qh3lq7jr89uw",
-    "45.38.107.97:6014:ycbfzlos:qh3lq7jr89uw",
-    "198.105.121.200:6462:ycbfzlos:qh3lq7jr89uw",
-    "64.137.96.74:6641:ycbfzlos:qh3lq7jr89uw",
-    "198.23.243.226:6361:ycbfzlos:qh3lq7jr89uw",
-    "38.154.185.97:6370:ycbfzlos:qh3lq7jr89uw",
-    "84.247.60.125:6095:ycbfzlos:qh3lq7jr89uw",
-    "142.111.67.146:5611:ycbfzlos:qh3lq7jr89uw",
-    "191.96.254.138:6185:ycbfzlos:qh3lq7jr89uw",
-]
-
-PROXIES = []
-for p in RAW_PROXIES:
-    parts = p.split(":")
-    PROXIES.append(f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}")
-
-_proxy_idx = 0
-
-def get_proxy_list():
-    global _proxy_idx
-    seq = []
-    n = len(PROXIES)
-    start = _proxy_idx
-    _proxy_idx += 1
-    for i in range(n):
-        seq.append(PROXIES[(start + i) % n])
-    seq.append(None)
-    return seq
 
 YDL_BASE_OPTS = {
     "quiet": True,
@@ -73,11 +44,6 @@ YDL_BASE_OPTS = {
     "allow_unplayable_formats": False,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     "ffmpeg_location": FFMPEG_EXE,
-    "extractor_args": {
-        "youtube": {
-            "player_client": ["android", "ios", "mweb", "web", "tvhtml5"]
-        }
-    }
 }
 
 PLATFORM_PATTERNS = {
@@ -115,28 +81,16 @@ def extract_metadata(url: str) -> dict:
     if key in info_cache:
         return info_cache[key]
     
-    # Try Direct first (fastest, 300ms), followed by top 2 residential proxies with 3s timeout
-    proxy_attempts = [None] + get_proxy_list()[:2]
-    for proxy in proxy_attempts:
-        opts = dict(YDL_BASE_OPTS)
-        opts["socket_timeout"] = 3
-        if proxy:
-            opts["proxy"] = proxy
-        if "tiktok.com" in url:
-            opts["format"] = "best"
+    opts = dict(YDL_BASE_OPTS)
+    if "tiktok.com" in url:
+        opts["format"] = "best"
 
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-            if info:
-                info_cache[key] = info
-                return info
-        except Exception:
-            continue
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
 
-    return None
-
-
+    if info:
+        info_cache[key] = info
+    return info
 
 def format_filesize(bytes_val):
     if not bytes_val or bytes_val <= 0:
@@ -162,17 +116,12 @@ def process_formats(info: dict) -> list:
     processed = []
     seen_heights = set()
 
-    duration_sec = info.get("duration") or 180
-
     best_audio_size = 0
-    best_audio_url = ""
     for f in raw_formats:
         if f.get("vcodec") == "none" and f.get("acodec") != "none":
             sz = f.get("filesize") or f.get("filesize_approx") or 0
             if sz > best_audio_size:
                 best_audio_size = sz
-            if not best_audio_url and f.get("url"):
-                best_audio_url = f.get("url")
 
     # 1. Process Video formats
     for f in raw_formats:
@@ -186,7 +135,10 @@ def process_formats(info: dict) -> list:
             continue
 
         height = f.get("height") or 0
-        if height <= 0 or height in seen_heights:
+        if height <= 0:
+            continue
+
+        if height in seen_heights:
             continue
         seen_heights.add(height)
 
@@ -213,55 +165,30 @@ def process_formats(info: dict) -> list:
             "sound_status": "Sound Supported" if is_combined else "Auto-Merged Sound",
         })
 
-    # 2. Add Standard Qualities (1080p, 720p, 480p, 360p, 240p, 144p) if YouTube omitted them
-    STANDARD_QUALITIES = [
-        (1080, "1080p Full HD", "137"),
-        (720, "720p HD", "22"),
-        (480, "480p", "135"),
-        (360, "360p", "18"),
-        (240, "240p", "133"),
-        (144, "144p", "160"),
-    ]
-    for req_h, req_label, req_fid in STANDARD_QUALITIES:
-        if req_h not in seen_heights:
-            seen_heights.add(req_h)
-            bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
-            est_sz = int((bitrate_map.get(req_h, 50*1024) + 16*1024) * duration_sec)
-            processed.append({
-                "format_id": req_fid,
-                "ext": "mp4",
-                "quality_label": req_label,
-                "height": req_h,
-                "filesize": est_sz,
-                "filesize_human": format_filesize(est_sz),
-                "has_video": True,
-                "has_audio": True,
-                "is_combined": False,
-                "need_merge": True,
-                "direct_url": "",
-                "sound_status": "Sound Supported",
-            })
+    # 2. Add Audio-Only (MP3) Format
+    best_audio_format = None
+    for f in raw_formats:
+        if f.get("vcodec") == "none" and f.get("acodec") != "none":
+            best_audio_format = f
 
-    # 3. Add Audio-Only (MP3) Format
-    audio_final_sz = best_audio_size or int(16 * 1024 * duration_sec)
-    processed.append({
-        "format_id": "bestaudio",
-        "ext": "mp3",
-        "quality_label": "MP3 Audio (High Quality)",
-        "height": 0,
-        "filesize": audio_final_sz,
-        "filesize_human": format_filesize(audio_final_sz),
-        "has_video": False,
-        "has_audio": True,
-        "is_combined": False,
-        "need_merge": True,
-        "direct_url": best_audio_url,
-        "sound_status": "Audio MP3",
-    })
+    if best_audio_format or not processed:
+        processed.append({
+            "format_id": "bestaudio",
+            "ext": "mp3",
+            "quality_label": "MP3 Audio (High Quality)",
+            "height": 0,
+            "filesize": best_audio_size,
+            "filesize_human": format_filesize(best_audio_size),
+            "has_video": False,
+            "has_audio": True,
+            "is_combined": False,
+            "need_merge": True,
+            "direct_url": best_audio_format.get("url") if best_audio_format else "",
+            "sound_status": "Audio MP3",
+        })
 
     processed.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
     return processed
-
 
 @app.route("/")
 def index():
@@ -387,53 +314,45 @@ def bg_download_task(job_id, url, format_id):
             
         elif status == "finished":
             job["status"] = "merging"
-    success = False
-    for proxy in get_proxy_list():
-        dl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "ffmpeg_location": FFMPEG_EXE,
-            "format": format_spec,
-            "outtmpl": out_template,
-            "merge_output_format": "mp4" if not is_mp3 else None,
-            "postprocessors": postprocessors,
-            "progress_hooks": [progress_hook],
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        }
-        if proxy:
-            dl_opts["proxy"] = proxy
+            job["percent"] = 99.0
 
-        try:
-            with yt_dlp.YoutubeDL(dl_opts) as ydl:
-                ydl.download([url])
-            success = True
-            break
-        except Exception:
-            continue
+    dl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "ffmpeg_location": FFMPEG_EXE,
+        "format": format_spec,
+        "outtmpl": out_template,
+        "merge_output_format": "mp4" if not is_mp3 else None,
+        "postprocessors": postprocessors,
+        "progress_hooks": [progress_hook],
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    }
 
-    if not success:
+    try:
+        with yt_dlp.YoutubeDL(dl_opts) as ydl:
+            ydl.download([url])
+
+        downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
+        if not downloaded_files:
+            job["status"] = "error"
+            job["error"] = "Failed to download/merge video stream."
+            return
+
+        filepath = downloaded_files[0]
+        filesize = os.path.getsize(filepath)
+
+        job["status"] = "ready"
+        job["percent"] = 100.0
+        job["filepath"] = filepath
+        job["temp_dir"] = temp_dir
+        job["ascii_filename"] = ascii_filename
+        job["encoded_filename"] = encoded_filename
+        job["filesize"] = filesize
+        job["is_mp3"] = is_mp3
+
+    except Exception as e:
         job["status"] = "error"
-        job["error"] = "Failed to download media stream after proxy failover retries."
-        return
-
-    downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
-    if not downloaded_files:
-        job["status"] = "error"
-        job["error"] = "Failed to download/merge video stream."
-        return
-
-    filepath = downloaded_files[0]
-    filesize = os.path.getsize(filepath)
-
-    job["status"] = "ready"
-    job["percent"] = 100.0
-    job["filepath"] = filepath
-    job["temp_dir"] = temp_dir
-    job["ascii_filename"] = ascii_filename
-    job["encoded_filename"] = encoded_filename
-    job["filesize"] = filesize
-    job["is_mp3"] = is_mp3
-
+        job["error"] = str(e)
 
 
 @app.route("/api/start_download", methods=["GET"])
@@ -502,67 +421,60 @@ def api_download():
         format_spec = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
         postprocessors = []
 
-    success = False
-    for proxy in get_proxy_list():
-        dl_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "ffmpeg_location": FFMPEG_EXE,
-            "format": format_spec,
-            "outtmpl": out_template,
-            "merge_output_format": "mp4" if not is_mp3 else None,
-            "postprocessors": postprocessors,
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        }
-        if proxy:
-            dl_opts["proxy"] = proxy
-
-        try:
-            with yt_dlp.YoutubeDL(dl_opts) as ydl:
-                ydl.download([url])
-            success = True
-            break
-        except Exception:
-            continue
-
-    if not success:
-        return jsonify({"error": "Failed to download video stream."}), 500
-
-    downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
-    if not downloaded_files:
-        return jsonify({"error": "Failed to download/merge video stream."}), 500
-
-    filepath = downloaded_files[0]
-    filesize = os.path.getsize(filepath)
-
-
-    response_headers = {
-        "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}',
-        "Content-Type": "audio/mpeg" if is_mp3 else "video/mp4",
-        "Content-Length": str(filesize),
-        "Accept-Ranges": "bytes",
+    dl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "ffmpeg_location": FFMPEG_EXE,
+        "format": format_spec,
+        "outtmpl": out_template,
+        "merge_output_format": "mp4" if not is_mp3 else None,
+        "postprocessors": postprocessors,
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     }
 
-    def generate_file_and_cleanup():
-        try:
-            with open(filepath, "rb") as f:
-                while chunk := f.read(512 * 1024):
-                    yield chunk
-        finally:
+    try:
+        with yt_dlp.YoutubeDL(dl_opts) as ydl:
+            ydl.download([url])
+
+        downloaded_files = glob.glob(os.path.join(temp_dir, "*"))
+        if not downloaded_files:
+            return jsonify({"error": "Failed to download/merge video stream."}), 500
+
+        filepath = downloaded_files[0]
+        filesize = os.path.getsize(filepath)
+
+        response_headers = {
+            "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            "Content-Type": "audio/mpeg" if is_mp3 else "video/mp4",
+            "Content-Length": str(filesize),
+            "Accept-Ranges": "bytes",
+        }
+
+        def generate_file_and_cleanup():
             try:
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-                if os.path.exists(temp_dir):
-                    os.rmdir(temp_dir)
-            except Exception:
-                pass
+                with open(filepath, "rb") as f:
+                    while chunk := f.read(512 * 1024):
+                        yield chunk
+            finally:
+                try:
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                    if os.path.exists(temp_dir):
+                        os.rmdir(temp_dir)
+                except Exception:
+                    pass
 
-    return Response(
-        stream_with_context(generate_file_and_cleanup()),
-        status=200,
-        headers=response_headers,
-    )
+        return Response(
+            stream_with_context(generate_file_and_cleanup()),
+            status=200,
+            headers=response_headers,
+        )
 
+    except Exception as e:
+        direct_url = info.get("url")
+        if direct_url:
+            return redirect(direct_url)
+        return jsonify({"error": f"Download error: {str(e)}"}), 502
 
 
 @app.route("/api/job_status/<job_id>", methods=["GET"])
@@ -1511,6 +1423,6 @@ async function startDownloadWithProgress(startUrl, qualityLabel, formatExt) {
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"[SnapFetch] Starting Server on port {port} with FFmpeg: {FFMPEG_EXE}")
+    print(f"[SnapFetch] Starting Sound-Supported Downloader Server with FFmpeg: {FFMPEG_EXE}")
+    print(f"[SnapFetch] Server live on http://localhost:{port}")
     app.run(host="0.0.0.0", port=port, debug=False, threaded=True)
-

@@ -1,6 +1,6 @@
-flask==3.0.3
-yt-dlp>=2024.08.06
+Flask==3.0.3
+yt-dlp>=2024.10.22
+requests>=2.32.3
+cachetools>=5.5.0
 imageio-ffmpeg>=0.4.9
-cachetools>=5.3.3
-requests>=2.31.0
 gunicorn>=21.2.0
