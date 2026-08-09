@@ -60,20 +60,33 @@ def custom_youtube_web_scraper(url_or_id: str) -> dict:
         video_id_match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
         video_id = video_id_match.group(1) if video_id_match else url_or_id
         
-        mobile_url = f"https://m.youtube.com/watch?v={video_id}"
+        urls_to_try = [
+            f"https://www.youtube.com/watch?v={video_id}",
+            f"https://m.youtube.com/watch?v={video_id}"
+        ]
         headers = {
-            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Accept-Language": "en-US,en;q=0.9"
         }
         
-        res = requests.get(mobile_url, headers=headers, timeout=5)
-        if res.status_code != 200:
-            return None
-
-        data = extract_player_response(res.text)
+        data = None
+        for target_url in urls_to_try:
+            try:
+                res = requests.get(target_url, headers=headers, timeout=5)
+                if res.status_code == 200:
+                    data = extract_player_response(res.text)
+                    if not data:
+                        data = extract_json_object(res.text, "var ytInitialPlayerResponse = ")
+                    if not data:
+                        data = extract_json_object(res.text, "ytInitialPlayerResponse = ")
+                    if data and data.get("streamingData"):
+                        break
+            except Exception:
+                pass
+                    
         if not data:
             return None
-            
+
         details = data.get("videoDetails", {})
         streaming = data.get("streamingData", {})
         
@@ -170,6 +183,7 @@ def custom_youtube_web_scraper(url_or_id: str) -> dict:
         }
     except Exception:
         return None
+
 
 def get_oembed_fallback(url: str) -> dict:
     try:
