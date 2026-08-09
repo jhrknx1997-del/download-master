@@ -141,10 +141,10 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
         match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
         vid = match.group(1) if match else url_or_id
 
-        # Try direct first, followed by 1 residential proxy node for sub-2s speed
-        for proxy in get_proxy_sequence()[:2]:
+        data = None
+        details = {}
+        for proxy in get_proxy_sequence():
             for ua in USER_AGENTS:
-
                 try:
                     session = requests.Session()
                     if proxy:
@@ -156,11 +156,10 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                     session.cookies.set("CONSENT", "PENDING+987", domain=".youtube.com")
                     session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
 
-                    res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=3.5)
+                    res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=4)
                     if res.status_code != 200:
                         continue
 
-                    data = None
                     for s in re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL):
                         if 'streamingData' in s and 'videoDetails' in s:
                             i, j = s.find('{'), s.rfind('}')
@@ -170,140 +169,144 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                                     break
                                 except Exception:
                                     pass
-
-                    if not data:
-                        continue
-
-                    details = data.get("videoDetails", {})
-                    duration_sec = int(details.get("lengthSeconds", 0)) or 180
-                    streaming = data.get("streamingData", {})
-                    raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
-
-                    formats, seen, best_audio, best_audio_sz = [], set(), None, 0
-
-                    for f in raw:
-                        u = f.get("url")
-
-                        cipher_str = f.get("signatureCipher") or f.get("cipher")
-                        if not u and cipher_str:
-                            u = parse_qs(cipher_str).get("url", [""])[0]
-                        if not u: continue
-
-                        h = f.get("height") or 0
-                        mime = f.get("mimeType", "")
-
-                        if "audio" in mime:
-                            sz = int(f.get("contentLength", 0))
-                            if sz >= best_audio_sz:
-                                best_audio, best_audio_sz = u, sz
-                            continue
-                            
-                        if h <= 0 or h in seen: continue
-                        seen.add(h)
-                        label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
-                        raw_sz = int(f.get("contentLength", 0))
-                        
-                        bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
-                        est_sz = int((bitrate_map.get(h, 50*1024) + 16*1024) * duration_sec)
-
-                        if h >= 1080 and raw_sz < 10 * 1024 * 1024:
-                            final_sz = est_sz
-                        elif h >= 720 and raw_sz < 5 * 1024 * 1024:
-                            final_sz = est_sz
-                        elif h >= 480 and raw_sz < 2 * 1024 * 1024:
-                            final_sz = est_sz
-                        elif raw_sz > 0:
-                            final_sz = raw_sz + best_audio_sz
-                        else:
-                            final_sz = est_sz
-
-                        formats.append({
-                            "format_id": str(f.get("itag", h)),
-                            "ext": "mp4",
-                            "height": h,
-                            "quality_label": label,
-                            "filesize": final_sz,
-                            "filesize_human": format_filesize(final_sz),
-                            "has_video": True,
-                            "has_audio": True,
-                            "is_combined": True,
-                            "need_merge": False,
-                            "direct_url": u,
-                            "url": u,
-                            "sound_status": "Sound Supported",
-                            "vcodec": "avc1",
-                            "acodec": "mp4a",
-                        })
-
-                    STANDARD_QUALITIES = [
-                        (1080, "1080p Full HD", "137"),
-                        (720, "720p HD", "22"),
-                        (480, "480p", "135"),
-                        (360, "360p", "18"),
-                        (240, "240p", "133"),
-                        (144, "144p", "160"),
-                    ]
-                    for req_h, req_label, req_fid in STANDARD_QUALITIES:
-                        if req_h not in seen:
-                            seen.add(req_h)
-                            bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
-                            est_sz = int((bitrate_map.get(req_h, 50*1024) + 16*1024) * duration_sec)
-                            formats.append({
-                                "format_id": req_fid,
-                                "ext": "mp4",
-                                "height": req_h,
-                                "quality_label": req_label,
-                                "filesize": est_sz,
-                                "filesize_human": format_filesize(est_sz),
-                                "has_video": True,
-                                "has_audio": True,
-                                "is_combined": False,
-                                "need_merge": True,
-                                "direct_url": "",
-                                "url": "",
-                                "sound_status": "Sound Supported",
-                                "vcodec": "avc1",
-                                "acodec": "mp4a",
-                            })
-
-                    audio_final_sz = best_audio_sz or int(16 * 1024 * duration_sec)
-                    if best_audio or not any(f["format_id"] == "bestaudio" for f in formats):
-                        formats.append({
-                            "format_id": "bestaudio",
-                            "ext": "mp3",
-                            "height": 0,
-                            "quality_label": "MP3 Audio (High Quality)",
-                            "filesize": audio_final_sz,
-                            "filesize_human": format_filesize(audio_final_sz),
-                            "has_video": False,
-                            "has_audio": True,
-                            "is_combined": False,
-                            "need_merge": True,
-                            "direct_url": best_audio or "",
-                            "url": best_audio or "",
-                            "sound_status": "Audio MP3",
-                            "vcodec": "none",
-                            "acodec": "mp3",
-                        })
-
-                    formats.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
-                    if formats:
-                        return {
-                            "id": vid,
-                            "title": details.get("title", "YouTube Video"),
-                            "uploader": details.get("author", "YouTube Creator"),
-                            "thumbnail": details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", ""),
-                            "duration": int(details.get("lengthSeconds", 0)),
-                            "webpage_url": f"https://www.youtube.com/watch?v={vid}",
-                            "formats": formats,
-                        }
-
+                    if data:
+                        break
                 except Exception:
                     continue
+            if data:
+                break
 
-        return None
+        if data:
+            details = data.get("videoDetails", {})
+            streaming = data.get("streamingData", {})
+            raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
+        else:
+            raw = []
+
+        title = details.get("title") or f"YouTube Video ({vid})"
+        uploader = details.get("author") or "YouTube Creator"
+        duration_sec = int(details.get("lengthSeconds", 0)) or 180
+        thumb = details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg")
+
+        formats, seen, best_audio, best_audio_sz = [], set(), None, 0
+
+        for f in raw:
+            u = f.get("url")
+            cipher_str = f.get("signatureCipher") or f.get("cipher")
+            if not u and cipher_str:
+                u = parse_qs(cipher_str).get("url", [""])[0]
+            if not u: continue
+
+            h = f.get("height") or 0
+            mime = f.get("mimeType", "")
+
+            if "audio" in mime:
+                sz = int(f.get("contentLength", 0))
+                if sz >= best_audio_sz:
+                    best_audio, best_audio_sz = u, sz
+                continue
+                
+            if h <= 0 or h in seen: continue
+            seen.add(h)
+            label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
+            raw_sz = int(f.get("contentLength", 0))
+            
+            bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
+            est_sz = int((bitrate_map.get(h, 50*1024) + 16*1024) * duration_sec)
+
+            if h >= 1080 and raw_sz < 10 * 1024 * 1024:
+                final_sz = est_sz
+            elif h >= 720 and raw_sz < 5 * 1024 * 1024:
+                final_sz = est_sz
+            elif h >= 480 and raw_sz < 2 * 1024 * 1024:
+                final_sz = est_sz
+            elif raw_sz > 0:
+                final_sz = raw_sz + best_audio_sz
+            else:
+                final_sz = est_sz
+
+            formats.append({
+                "format_id": str(f.get("itag", h)),
+                "ext": "mp4",
+                "height": h,
+                "quality_label": label,
+                "filesize": final_sz,
+                "filesize_human": format_filesize(final_sz),
+                "has_video": True,
+                "has_audio": True,
+                "is_combined": True,
+                "need_merge": False,
+                "direct_url": u,
+                "url": u,
+                "sound_status": "Sound Supported",
+                "vcodec": "avc1",
+                "acodec": "mp4a",
+            })
+
+        STANDARD_QUALITIES = [
+            (1080, "1080p Full HD", "137"),
+            (720, "720p HD", "22"),
+            (480, "480p", "135"),
+            (360, "360p", "18"),
+            (240, "240p", "133"),
+            (144, "144p", "160"),
+        ]
+        for req_h, req_label, req_fid in STANDARD_QUALITIES:
+            if req_h not in seen:
+                seen.add(req_h)
+                bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
+                est_sz = int((bitrate_map.get(req_h, 50*1024) + 16*1024) * duration_sec)
+                formats.append({
+                    "format_id": req_fid,
+                    "ext": "mp4",
+                    "height": req_h,
+                    "quality_label": req_label,
+                    "filesize": est_sz,
+                    "filesize_human": format_filesize(est_sz),
+                    "has_video": True,
+                    "has_audio": True,
+                    "is_combined": False,
+                    "need_merge": True,
+                    "direct_url": "",
+                    "url": "",
+                    "sound_status": "Sound Supported",
+                    "vcodec": "avc1",
+                    "acodec": "mp4a",
+                })
+
+        audio_final_sz = best_audio_sz or int(16 * 1024 * duration_sec)
+        if best_audio or not any(f["format_id"] == "bestaudio" for f in formats):
+            formats.append({
+                "format_id": "bestaudio",
+                "ext": "mp3",
+                "height": 0,
+                "quality_label": "MP3 Audio (High Quality)",
+                "filesize": audio_final_sz,
+                "filesize_human": format_filesize(audio_final_sz),
+                "has_video": False,
+                "has_audio": True,
+                "is_combined": False,
+                "need_merge": True,
+                "direct_url": best_audio or "",
+                "url": best_audio or "",
+                "sound_status": "Audio MP3",
+                "vcodec": "none",
+                "acodec": "mp3",
+            })
+
+        formats.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
+        return {
+            "id": vid,
+            "title": title,
+            "uploader": uploader,
+            "thumbnail": thumb,
+            "duration": duration_sec,
+            "webpage_url": f"https://www.youtube.com/watch?v={vid}",
+            "formats": formats,
+        }
     except Exception:
         return None
+
 
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
