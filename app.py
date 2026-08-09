@@ -150,9 +150,45 @@ def api_info():
 @app.route("/api/download_file", methods=["GET"])
 def api_stream():
     stream_url = request.args.get("url", "")
+    filename = request.args.get("filename", "media.mp4")
     if not stream_url:
         return jsonify({"error": "Missing stream URL"}), 400
-    return redirect(stream_url, code=302)
+
+    safe_filename = re.sub(r'[^\w\s\.-]', '', filename).strip() or "media.mp4"
+    utf8_filename = quote(filename)
+
+    req_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "*/*",
+        "Accept-Encoding": "identity",
+    }
+    if "Range" in request.headers:
+        req_headers["Range"] = request.headers["Range"]
+
+    try:
+        r = requests.get(stream_url, headers=req_headers, stream=True, timeout=30)
+        if r.status_code not in (200, 206):
+            return redirect(stream_url, code=302)
+
+        def generate():
+            for chunk in r.iter_content(chunk_size=131072):
+                if chunk:
+                    yield chunk
+
+        rh = {
+            "Content-Type": r.headers.get("Content-Type", "video/mp4"),
+            "Content-Disposition": f'attachment; filename="{safe_filename}"; filename*=UTF-8\'\'{utf8_filename}',
+            "Accept-Ranges": "bytes",
+        }
+        if "Content-Length" in r.headers:
+            rh["Content-Length"] = r.headers["Content-Length"]
+        if "Content-Range" in r.headers:
+            rh["Content-Range"] = r.headers["Content-Range"]
+
+        return Response(generate(), status=r.status_code, headers=rh)
+    except Exception:
+        return redirect(stream_url, code=302)
+
 
 
 
