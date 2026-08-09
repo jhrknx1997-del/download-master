@@ -48,16 +48,12 @@ YDL_BASE_OPTS = {
 
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    if key in info_cache:
-        return info_cache[key]
     
     # Tier 1: Try Custom Mobile Session Scraper FIRST for YouTube
     if "youtube.com" in url or "youtu.be" in url:
         scraped = custom_youtube_scraper(url)
         # Only use scraped if it successfully extracted multiple resolutions (>=4 formats)
         if scraped and isinstance(scraped.get("formats"), list) and len(scraped["formats"]) >= 4:
-            info_cache[key] = scraped
             return scraped
 
     # Tier 2: Multi-client fallback using yt_dlp (populates ALL resolutions: 1080p, 720p, 480p, 360p, etc.)
@@ -69,7 +65,6 @@ def extract_metadata(url: str) -> dict:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
         if info:
-            info_cache[key] = info
             return info
     except Exception:
         pass
@@ -78,10 +73,10 @@ def extract_metadata(url: str) -> dict:
     if "youtube.com" in url or "youtu.be" in url:
         scraped = custom_youtube_scraper(url)
         if scraped:
-            info_cache[key] = scraped
             return scraped
 
     return None
+
 
 
 
