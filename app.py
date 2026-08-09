@@ -186,10 +186,16 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                 if not data:
                     continue
 
+                details = data.get("videoDetails", {})
                 duration_sec = int(details.get("lengthSeconds", 0)) or 180
+                streaming = data.get("streamingData", {})
+                raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
+
+                formats, seen, best_audio, best_audio_sz = [], set(), None, 0
 
                 for f in raw:
                     u = f.get("url")
+
                     cipher_str = f.get("signatureCipher") or f.get("cipher")
                     if not u and cipher_str:
                         u = parse_qs(cipher_str).get("url", [""])[0]
