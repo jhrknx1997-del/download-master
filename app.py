@@ -137,9 +137,10 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
         match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
         vid = match.group(1) if match else url_or_id
 
-        # Try direct first, then proxy nodes sequentially
-        for proxy in get_proxy_sequence():
+        # Try direct first, followed by 1 residential proxy node for sub-2s speed
+        for proxy in get_proxy_sequence()[:2]:
             for ua in USER_AGENTS:
+
                 try:
                     session = requests.Session()
                     if proxy:
@@ -306,8 +307,8 @@ def extract_metadata(url: str) -> dict:
             info_cache[key] = scraped
             return scraped
 
-    # 2. For TikTok, Instagram, Facebook, X, Reddit, Pinterest, Vimeo, fallback to yt_dlp with sequential proxy failover
-    for proxy in get_proxy_sequence():
+    # 2. For TikTok, Instagram, Facebook, X, Reddit, Pinterest, Vimeo, fallback to yt_dlp with sequential proxy failover (max 3 nodes for sub-5s speed)
+    for proxy in get_proxy_sequence()[:3]:
         opts = dict(YDL_BASE_OPTS)
         if proxy:
             opts["proxy"] = proxy
@@ -322,6 +323,7 @@ def extract_metadata(url: str) -> dict:
                 return info
         except Exception:
             continue
+
 
     return None
 
