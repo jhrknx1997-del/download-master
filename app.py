@@ -522,7 +522,12 @@ def api_download():
     ascii_filename = f"{ascii_title}.{target_ext}"
 
     utf8_filename = f"{raw_title}.{target_ext}"
-    encoded_filename = quote(utf8_filename.encode("utf-8"))
+    formats = info.get("formats", []) or []
+    target_fmt = next((f for f in formats if str(f.get("format_id")) == str(format_id)), None) if format_id else None
+
+    # Instant 0.1s CDN Download for Combined Formats (Pre-merged with sound)
+    if target_fmt and target_fmt.get("is_combined") and target_fmt.get("url"):
+        return redirect(target_fmt["url"])
 
     temp_dir = tempfile.mkdtemp(prefix="snapfetch_direct_")
     out_template = os.path.join(temp_dir, f"media_%(id)s.{target_ext}")
