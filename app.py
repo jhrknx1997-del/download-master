@@ -12,6 +12,7 @@ import tempfile
 import hashlib
 import threading
 import imageio_ffmpeg
+import shutil
 import requests
 import yt_dlp
 from cachetools import TTLCache
@@ -21,13 +22,15 @@ from flask import Flask, Response, jsonify, request, stream_with_context, redire
 app = Flask(__name__)
 
 # Discover FFmpeg binary path
-try:
-    if os.name != "nt" and os.system("which ffmpeg > /dev/null 2>&1") == 0:
-        FFMPEG_EXE = "ffmpeg"
-    else:
-        FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
-except Exception:
-    FFMPEG_EXE = "ffmpeg"
+def resolve_ffmpeg():
+    if shutil.which("ffmpeg"):
+        return "ffmpeg"
+    try:
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"
+
+FFMPEG_EXE = resolve_ffmpeg()
 
 # In-memory cache for extracted metadata (15 minute TTL, up to 3000 items)
 info_cache: TTLCache = TTLCache(maxsize=3000, ttl=900)
