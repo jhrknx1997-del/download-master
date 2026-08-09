@@ -1,0 +1,8 @@
+[providers]
+providers = ["python"]
+
+[build]
+aptPkgs = ["ffmpeg"]
+
+[start]
+cmd = "python3 app.py"
