@@ -151,24 +151,32 @@ def api_stream():
     stream_url = request.args.get("url", "")
     filename = request.args.get("filename", "video.mp4")
     if not stream_url: return jsonify({"error": "Missing URL"}), 400
+    
+    safe_filename = re.sub(r'[^\w\s\.-]', '', filename).strip() or "media.mp4"
+    utf8_filename = quote(filename)
+    
     hdrs = {
-        "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     }
     if "Range" in request.headers: hdrs["Range"] = request.headers["Range"]
     try:
-        r = requests.get(stream_url, headers=hdrs, stream=True, timeout=30)
+        r = requests.get(stream_url, headers=hdrs, stream=True, timeout=15)
+        if r.status_code not in (200, 206):
+            return redirect(stream_url, code=302)
+
         rh = {
             "Content-Type": r.headers.get("Content-Type", "video/mp4"),
-            "Content-Disposition": f'attachment; filename="{quote(filename)}"',
+            "Content-Disposition": f'attachment; filename="{safe_filename}"; filename*=UTF-8\'\'{utf8_filename}',
             "Accept-Ranges": "bytes",
         }
         if "Content-Length" in r.headers: rh["Content-Length"] = r.headers["Content-Length"]
         if "Content-Range" in r.headers: rh["Content-Range"] = r.headers["Content-Range"]
-        sc = r.status_code if r.status_code in (200, 206) else 200
-        if request.method == "HEAD": return Response("", status=sc, headers=rh)
-        return Response((c for c in r.iter_content(65536) if c), status=sc, headers=rh)
+        
+        if request.method == "HEAD": return Response("", status=r.status_code, headers=rh)
+        return Response((c for c in r.iter_content(65536) if c), status=r.status_code, headers=rh)
     except Exception:
-        return redirect(stream_url)
+        return redirect(stream_url, code=302)
+
 
 INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="en">
