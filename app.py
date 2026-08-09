@@ -50,13 +50,16 @@ def extract_metadata(url: str) -> dict:
     url = clean_url(url)
     
     # Tier 1: Try Custom Mobile Session Scraper FIRST for YouTube
+    scraped = None
     if "youtube.com" in url or "youtu.be" in url:
         scraped = custom_youtube_scraper(url)
-        # Only use scraped if it successfully extracted multiple resolutions (>=4 formats)
-        if scraped and isinstance(scraped.get("formats"), list) and len(scraped["formats"]) >= 4:
-            return scraped
+        # If custom scraper got full resolution set (>=4 formats with 720p+), return it immediately!
+        if scraped and isinstance(scraped.get("formats"), list):
+            has_hd = any(f.get("height", 0) >= 720 for f in scraped["formats"])
+            if len(scraped["formats"]) >= 4 and has_hd:
+                return scraped
 
-    # Tier 2: Multi-client fallback using yt_dlp (populates ALL resolutions: 1080p, 720p, 480p, 360p, etc.)
+    # Tier 2: Multi-client extraction engine (yt_dlp) - populates 1080p, 720p, 480p, 360p, 240p, 144p, MP3
     opts = dict(YDL_BASE_OPTS)
     if "tiktok.com" in url:
         opts["format"] = "best"
@@ -64,18 +67,17 @@ def extract_metadata(url: str) -> dict:
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-        if info:
+        if info and info.get("formats"):
             return info
     except Exception:
         pass
 
-    # Final fallback to scraped if yt_dlp failed
-    if "youtube.com" in url or "youtu.be" in url:
-        scraped = custom_youtube_scraper(url)
-        if scraped:
-            return scraped
+    # Tier 3: Fallback to scraped if yt_dlp failed
+    if scraped:
+        return scraped
 
     return None
+
 
 
 
