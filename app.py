@@ -143,14 +143,6 @@ def extract_metadata(url: str) -> dict:
     if "tiktok.com" in url:
         base_opts["format"] = "best"
 
-    if is_youtube:
-        base_opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["android", "ios", "web"],
-                "player_skip": ["js", "configs"]
-            }
-        }
-
     attempts = 3 if is_youtube else 2
     last_error = None
 
