@@ -125,10 +125,13 @@ def custom_mobile_web_scraper(url_or_id: str) -> dict:
                 "quality_label": quality_label,
                 "filesize": int(f.get("contentLength", 0)),
                 "url": direct_url,
+                "vcodec": "none" if is_audio else "avc1",
+                "acodec": "mp3" if is_audio else ("mp4a" if "video" in mime else "none"),
                 "has_video": not is_audio,
                 "has_audio": is_audio or "video" in mime,
                 "sound_status": "Sound Supported" if not is_audio else "Audio MP3"
             })
+
             
         if not processed_formats:
             return None
