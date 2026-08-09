@@ -20,8 +20,12 @@ from flask import Flask, Response, jsonify, request, stream_with_context, redire
 
 app = Flask(__name__)
 
-# Discover FFmpeg binary path
-FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+# Discover FFmpeg binary path safely
+try:
+    FFMPEG_EXE = imageio_ffmpeg.get_ffmpeg_exe()
+except Exception:
+    FFMPEG_EXE = "ffmpeg"
+
 
 # In-memory cache for extracted metadata (15 minute TTL, up to 3000 items)
 info_cache: TTLCache = TTLCache(maxsize=3000, ttl=900)
