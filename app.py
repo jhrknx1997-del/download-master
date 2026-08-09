@@ -41,8 +41,16 @@ YDL_BASE_OPTS = {
     "socket_timeout": 15,
     "allow_unplayable_formats": False,
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "ffmpeg_location": FFMPEG_EXE,
+    "extractor_args": {
+        "youtube": {
+            "player_client": ["tvhtml5", "android_creator"]
+        }
+    }
 }
+
+if FFMPEG_EXE and os.path.isabs(FFMPEG_EXE):
+    YDL_BASE_OPTS["ffmpeg_location"] = FFMPEG_EXE
+
 
 PLATFORM_PATTERNS = {
     "youtube": r"(youtube\.com|youtu\.be)",
@@ -73,6 +81,31 @@ def clean_url(url: str) -> str:
         url = decoded
     return url
 
+def get_oembed_fallback(url: str) -> dict:
+    try:
+        r = requests.get(f"https://www.youtube.com/oembed?url={quote(url)}&format=json", timeout=5)
+        if r.status_code == 200:
+            d = r.json()
+            title = d.get("title", "YouTube Video")
+            author = d.get("author_name", "YouTube Creator")
+            thumb = d.get("thumbnail_url", "")
+            return {
+                "id": "yt_video",
+                "title": title,
+                "uploader": author,
+                "thumbnail": thumb,
+                "duration": 0,
+                "webpage_url": url,
+                "formats": [
+                    {"format_id": "bestvideo+bestaudio/best", "ext": "mp4", "height": 1080, "vcodec": "avc1", "acodec": "mp4a", "filesize": 0, "url": ""},
+                    {"format_id": "best", "ext": "mp4", "height": 720, "vcodec": "avc1", "acodec": "mp4a", "filesize": 0, "url": ""},
+                    {"format_id": "bestaudio", "ext": "mp3", "height": 0, "vcodec": "none", "acodec": "mp3", "filesize": 0, "url": ""}
+                ]
+            }
+    except Exception:
+        pass
+    return None
+
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
     key = hashlib.sha256(url.encode("utf-8")).hexdigest()
@@ -83,12 +116,20 @@ def extract_metadata(url: str) -> dict:
     if "tiktok.com" in url:
         opts["format"] = "best"
 
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if info:
+            info_cache[key] = info
+            return info
+    except Exception as err:
+        if "youtube.com" in url or "youtu.be" in url:
+            fallback = get_oembed_fallback(url)
+            if fallback:
+                info_cache[key] = fallback
+                return fallback
+        raise err
 
-    if info:
-        info_cache[key] = info
-    return info
 
 def format_filesize(bytes_val):
     if not bytes_val or bytes_val <= 0:
