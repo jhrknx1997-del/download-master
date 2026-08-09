@@ -231,6 +231,8 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                             "direct_url": u,
                             "url": u,
                             "sound_status": "Sound Supported",
+                            "vcodec": "avc1",
+                            "acodec": "mp4a",
                         })
 
                     STANDARD_QUALITIES = [
@@ -260,6 +262,8 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                                 "direct_url": "",
                                 "url": "",
                                 "sound_status": "Sound Supported",
+                                "vcodec": "avc1",
+                                "acodec": "mp4a",
                             })
 
                     audio_final_sz = best_audio_sz or int(16 * 1024 * duration_sec)
@@ -278,6 +282,8 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                             "direct_url": best_audio or "",
                             "url": best_audio or "",
                             "sound_status": "Audio MP3",
+                            "vcodec": "none",
+                            "acodec": "mp3",
                         })
 
                     formats.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
@@ -291,6 +297,7 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                             "webpage_url": f"https://www.youtube.com/watch?v={vid}",
                             "formats": formats,
                         }
+
                 except Exception:
                     continue
 
