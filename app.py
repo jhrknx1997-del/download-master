@@ -89,15 +89,22 @@ class ProxyManager:
             self.index += 1
             return proxy
 
-    def report_failure(self, proxy):
+    def report_failure(self, proxy, error_str=""):
         if proxy and proxy in self.failures:
             with self.lock:
-                self.failures[proxy] += 1
+                if "402" in str(error_str) or "Payment Required" in str(error_str) or "Tunnel connection failed" in str(error_str):
+                    self.failures[proxy] = 999
+                else:
+                    self.failures[proxy] += 1
 
     def report_success(self, proxy):
         if proxy and proxy in self.failures:
             with self.lock:
-                self.failures[proxy] = max(0, self.failures[proxy] - 1)
+                self.failures[proxy] = 0
+
+    def has_healthy_proxies(self):
+        with self.lock:
+            return any(f < 5 for f in self.failures.values())
 
 proxy_manager = ProxyManager(PROXIES)
 
@@ -155,12 +162,12 @@ def extract_metadata(url: str) -> dict:
     if "tiktok.com" in url:
         base_opts["format"] = "best"
 
-    attempts = 3 if is_youtube else 2
+    attempts = len(PROXIES) if is_youtube else 2
     last_error = None
 
     for attempt in range(attempts):
         opts = dict(base_opts)
-        use_proxy = is_youtube or (attempt > 0)
+        use_proxy = (is_youtube or attempt > 0) and proxy_manager.has_healthy_proxies()
         proxy_url = proxy_manager.get_proxy() if use_proxy else None
         
         if proxy_url:
@@ -177,8 +184,19 @@ def extract_metadata(url: str) -> dict:
         except Exception as e:
             last_error = e
             if proxy_url:
-                proxy_manager.report_failure(proxy_url)
+                proxy_manager.report_failure(proxy_url, str(e))
             continue
+
+    # Final direct fallback attempt if all proxies failed or were quarantined
+    try:
+        opts = dict(base_opts)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        if info:
+            info_cache[key] = info
+            return info
+    except Exception as e:
+        last_error = e
 
     if last_error:
         raise last_error
@@ -573,9 +591,11 @@ def api_download():
         )
 
     except Exception as e:
-        direct_url = info.get("url")
-        if direct_url:
-            return redirect(direct_url)
+        formats = info.get("formats", []) or []
+        target_fmt = next((f for f in formats if str(f.get("format_id")) == str(format_id)), None)
+        fallback_url = target_fmt.get("url") if target_fmt else (info.get("url") or (formats[-1].get("url") if formats else None))
+        if fallback_url:
+            return redirect(fallback_url)
         return jsonify({"error": f"Download error: {str(e)}"}), 502
 
 
