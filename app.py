@@ -235,20 +235,47 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                     })
 
 
-                if best_audio:
+                STANDARD_QUALITIES = [
+                    (1080, "1080p Full HD", "137"),
+                    (720, "720p HD", "22"),
+                    (480, "480p", "135"),
+                    (360, "360p", "18"),
+                    (240, "240p", "133"),
+                    (144, "144p", "160"),
+                ]
+                for req_h, req_label, req_fid in STANDARD_QUALITIES:
+                    if req_h not in seen:
+                        seen.add(req_h)
+                        formats.append({
+                            "format_id": req_fid,
+                            "ext": "mp4",
+                            "height": req_h,
+                            "quality_label": req_label,
+                            "filesize": 0,
+                            "filesize_human": "Auto / Variable",
+                            "has_video": True,
+                            "has_audio": True,
+                            "is_combined": False,
+                            "need_merge": True,
+                            "direct_url": "",
+                            "url": "",
+                            "sound_status": "Sound Supported",
+                        })
+
+                if best_audio or not any(f["format_id"] == "bestaudio" for f in formats):
                     formats.append({
                         "format_id": "bestaudio",
                         "ext": "mp3",
                         "height": 0,
                         "quality_label": "MP3 Audio (High Quality)",
                         "filesize": best_audio_sz,
-                        "filesize_human": format_filesize(best_audio_sz),
+                        "filesize_human": format_filesize(best_audio_sz) if best_audio_sz else "Auto / High Quality",
                         "has_video": False,
                         "has_audio": True,
                         "is_combined": False,
-                        "need_merge": False,
-                        "direct_url": best_audio,
-                        "url": best_audio,
+                        "need_merge": True,
+                        "direct_url": best_audio or "",
+                        "url": best_audio or "",
                         "sound_status": "Audio MP3",
                     })
 
@@ -263,6 +290,7 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                         "webpage_url": f"https://www.youtube.com/watch?v={vid}",
                         "formats": formats,
                     }
+
             except Exception:
                 continue
 
