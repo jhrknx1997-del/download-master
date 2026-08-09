@@ -1,6 +1,6 @@
 """
 SnapFetch Pro — Lightning-Fast Custom Scraper Engine
-Mobile YouTube API → Direct Stream URLs → Server Proxy Relay
+Architecture: Server = CORS Proxy + Stream Relay | Browser = YouTube Scraper
 """
 
 import os, re, json, time, requests
@@ -18,119 +18,36 @@ def clean_url(url):
         url = d
     return url
 
-def detect_platform(url):
-    for name, pat in {"youtube": r"(youtube\.com|youtu\.be)", "tiktok": r"tiktok\.com", "instagram": r"instagram\.com", "facebook": r"(facebook\.com|fb\.watch)", "x": r"(twitter\.com|x\.com)"}.items():
-        if re.search(pat, url, re.IGNORECASE): return name
-    return "media"
-
 def format_size(b):
     if not b or b <= 0: return "Auto"
     mb = b / (1024*1024)
     return f"{mb/1024:.2f} GB" if mb >= 1024 else (f"{mb:.1f} MB" if mb >= 1 else f"{b/1024:.0f} KB")
 
-def format_dur(s):
-    if not s: return ""
-    m, sec = divmod(int(s), 60)
-    h, m = divmod(m, 60)
-    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+# ── CORS Proxy: fetches YouTube page using USER's request context ─────────
 
-def scrape_youtube(url_or_id):
-    """Lightning-fast custom scraper — single mobile page fetch, ~900ms, ALL direct URLs"""
+@app.route("/api/proxy", methods=["GET"])
+def api_proxy():
+    """Fetches a YouTube page and returns the HTML. Browser calls this so
+       the stream URLs get signed to Railway's IP, then /api/stream relays."""
+    target = request.args.get("url", "")
+    if not target:
+        return jsonify({"error": "Missing url"}), 400
+
     try:
-        match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
-        vid = match.group(1) if match else url_or_id
+        r = requests.get(target, headers={
+            "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }, timeout=6)
+        resp = Response(r.text, status=r.status_code, content_type="text/html; charset=utf-8")
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-        # MOBILE YouTube returns direct stream URLs. Desktop does NOT (SABR only).
-        res = requests.get(
-            f"https://m.youtube.com/watch?v={vid}",
-            headers={
-                "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            timeout=6,
-        )
-        if res.status_code != 200: return None
-
-        data = None
-        for s in re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL):
-            if 'streamingData' in s and 'videoDetails' in s:
-                i, j = s.find('{'), s.rfind('}')
-                if i != -1 and j != -1:
-                    try: data = json.loads(s[i:j+1]); break
-                    except: pass
-        if not data: return None
-
-        details = data.get("videoDetails", {})
-        streaming = data.get("streamingData", {})
-        raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
-
-        formats, seen, best_audio, best_audio_sz = [], set(), None, 0
-
-        for f in raw:
-            u = f.get("url")
-            if not u and f.get("signatureCipher"):
-                u = parse_qs(f["signatureCipher"]).get("url", [""])[0]
-            if not u: continue
-
-            h = f.get("height") or 0
-            mime = f.get("mimeType", "")
-
-            if "audio" in mime:
-                sz = int(f.get("contentLength", 0))
-                if sz >= best_audio_sz: best_audio, best_audio_sz = u, sz
-                continue
-
-            if h <= 0 or h in seen: continue
-            seen.add(h)
-            label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
-            formats.append({
-                "format_id": str(f.get("itag", h)), "ext": "mp4", "height": h,
-                "quality_label": label, "filesize_human": format_size(int(f.get("contentLength", 0))),
-                "direct_url": u, "sound_status": "Sound Supported",
-            })
-
-        if best_audio:
-            formats.append({
-                "format_id": "bestaudio", "ext": "mp3", "height": 0,
-                "quality_label": "MP3 Audio (High Quality)", "filesize_human": format_size(best_audio_sz),
-                "direct_url": best_audio, "sound_status": "Audio MP3",
-            })
-
-        formats.sort(key=lambda x: (x["ext"] == "mp4", x["height"]), reverse=True)
-        if not formats: return None
-
-        return {
-            "title": details.get("title", "YouTube Video"),
-            "uploader": details.get("author", "YouTube Creator"),
-            "thumbnail": details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", ""),
-            "duration": int(details.get("lengthSeconds", 0)),
-            "formats": formats,
-        }
-    except Exception:
-        return None
-
-# ── Routes ────────────────────────────────────────────────────────────────────
-
-@app.route("/")
-def index(): return INDEX_HTML
-
-@app.route("/api/info", methods=["GET"])
-def api_info():
-    url = clean_url(request.args.get("url", ""))
-    if not url: return jsonify({"success": False, "error": "Please provide a URL."}), 400
-    t0 = time.time()
-    info = scrape_youtube(url)
-    if not info: return jsonify({"success": False, "error": "Could not resolve video."}), 422
-    return jsonify({
-        "success": True, "platform": detect_platform(url),
-        "title": info["title"], "uploader": info["uploader"],
-        "thumbnail": info["thumbnail"], "duration_human": format_dur(info["duration"]),
-        "formats": info["formats"], "elapsed_ms": round((time.time()-t0)*1000, 1),
-    })
+# ── Stream Relay: proxies googlevideo bytes so IP matches ─────────────────
 
 @app.route("/api/stream", methods=["GET", "HEAD"])
 def api_stream():
-    """Server proxies the download so IP matches the signed stream URL"""
     stream_url = request.args.get("url", "")
     filename = request.args.get("filename", "video.mp4")
     if not stream_url: return jsonify({"error": "Missing URL"}), 400
@@ -148,28 +65,17 @@ def api_stream():
         if "Content-Length" in r.headers: rh["Content-Length"] = r.headers["Content-Length"]
         if "Content-Range" in r.headers: rh["Content-Range"] = r.headers["Content-Range"]
         sc = r.status_code if r.status_code in (200, 206) else 200
-
         if request.method == "HEAD": return Response("", status=sc, headers=rh)
         return Response((chunk for chunk in r.iter_content(65536) if chunk), status=sc, headers=rh)
     except Exception:
         return redirect(stream_url)
 
-@app.route("/api/download", methods=["GET"])
-def api_download():
-    url = clean_url(request.args.get("url", ""))
-    fmt = request.args.get("format_id")
-    if not url: return jsonify({"error": "Missing URL"}), 400
-    info = scrape_youtube(url)
-    if not info: return jsonify({"error": "Could not resolve video."}), 422
-    target = next((f for f in info["formats"] if str(f["format_id"]) == str(fmt)), None) if fmt else None
-    du = (target or info["formats"][0]).get("direct_url", "")
-    if not du: return jsonify({"error": "No stream URL found"}), 404
-    fn = f"{info['title']}.{'mp3' if fmt == 'bestaudio' else 'mp4'}"
-    return redirect(f"/api/stream?url={quote(du)}&filename={quote(fn)}", code=302)
+@app.route("/")
+def index(): return INDEX_HTML
 
-# ── Frontend ──────────────────────────────────────────────────────────────────
+# ── Frontend: ALL scraping runs in browser JS ─────────────────────────────
 
-INDEX_HTML = """<!DOCTYPE html>
+INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -199,7 +105,7 @@ input{flex:1;background:0 0;border:none;outline:none;color:#fff;padding:14px 18p
 .bd{background:var(--acc);color:#000;text-decoration:none;padding:8px 20px;border-radius:10px;font-weight:700;font-size:.9rem;transition:.2s;display:inline-block}
 .bd:hover{opacity:.9;transform:scale(1.02)}
 .ld{display:none;text-align:center;margin:20px 0;color:var(--mut);font-weight:600}
-.tm{color:var(--acc);font-size:.8rem;margin-top:6px;text-align:right}
+.tm{color:var(--acc);font-size:.8rem;margin-top:8px;text-align:right}
 </style>
 </head>
 <body>
@@ -213,7 +119,7 @@ input{flex:1;background:0 0;border:none;outline:none;color:#fff;padding:14px 18p
 <input id="u" placeholder="Paste YouTube link here..." onkeydown="if(event.key==='Enter')go()">
 <button class="bf" onclick="go()">Fetch</button>
 </div>
-<div id="ld" class="ld">⚡ Resolving...</div>
+<div id="ld" class="ld">⚡ Resolving stream...</div>
 <div id="rc" class="rc">
 <div class="mh"><img id="img" class="th"><div><div id="ti" class="mt"></div><div id="me" class="mm"></div></div></div>
 <div id="fl" class="fg"></div>
@@ -221,30 +127,118 @@ input{flex:1;background:0 0;border:none;outline:none;color:#fff;padding:14px 18p
 </div>
 </div>
 <script>
+function fmtSize(b){if(!b||b<=0)return'Auto';const m=b/(1024*1024);return m>=1024?(m/1024).toFixed(2)+' GB':m>=1?m.toFixed(1)+' MB':Math.round(b/1024)+' KB'}
+
+async function scrapeYouTube(videoUrl){
+  const m=videoUrl.match(/(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})/);
+  if(!m)throw new Error('Invalid YouTube URL');
+  const vid=m[1];
+  const t0=performance.now();
+
+  // Fetch mobile YouTube page through our own server proxy (same IP for stream + download)
+  const proxyUrl='/api/proxy?url='+encodeURIComponent('https://m.youtube.com/watch?v='+vid);
+  const res=await fetch(proxyUrl);
+  if(!res.ok)throw new Error('Proxy fetch failed: '+res.status);
+  const html=await res.text();
+
+  // Parse ytInitialPlayerResponse from HTML
+  let data=null;
+  const scriptRe=/<script[^>]*>([\s\S]*?)<\/script>/g;
+  let match;
+  while((match=scriptRe.exec(html))!==null){
+    const s=match[1];
+    if(s.includes('streamingData')&&s.includes('videoDetails')){
+      const i=s.indexOf('{'),j=s.lastIndexOf('}');
+      if(i!==-1&&j!==-1){try{data=JSON.parse(s.substring(i,j+1));break}catch(e){}}
+    }
+  }
+  if(!data||!data.streamingData)throw new Error('Could not parse video data');
+
+  const details=data.videoDetails||{};
+  const streaming=data.streamingData||{};
+  const raw=[...(streaming.formats||[]),...(streaming.adaptiveFormats||[])];
+
+  const formats=[];const seen=new Set();
+  let bestAudioUrl=null,bestAudioSz=0;
+
+  raw.forEach(f=>{
+    let u=f.url;
+    if(!u&&f.signatureCipher){const p=new URLSearchParams(f.signatureCipher);u=p.get('url')}
+    if(!u)return;
+
+    const h=f.height||0;
+    const mime=f.mimeType||'';
+
+    if(mime.includes('audio')){
+      const sz=parseInt(f.contentLength||0);
+      if(sz>=bestAudioSz){bestAudioUrl=u;bestAudioSz=sz}
+      return;
+    }
+    if(h<=0||seen.has(h))return;
+    seen.add(h);
+    const label=h>=1080?h+'p Full HD':h>=720?h+'p HD':h+'p';
+    formats.push({
+      format_id:String(f.itag||h),ext:'mp4',height:h,
+      quality_label:label,filesize_human:fmtSize(parseInt(f.contentLength||0)),
+      direct_url:u,sound_status:'Sound Supported'
+    });
+  });
+
+  if(bestAudioUrl){
+    formats.push({
+      format_id:'bestaudio',ext:'mp3',height:0,
+      quality_label:'MP3 Audio (High Quality)',filesize_human:fmtSize(bestAudioSz),
+      direct_url:bestAudioUrl,sound_status:'Audio MP3'
+    });
+  }
+
+  formats.sort((a,b)=>{
+    if(a.ext==='mp4'&&b.ext!=='mp4')return -1;
+    if(a.ext!=='mp4'&&b.ext==='mp4')return 1;
+    return b.height-a.height;
+  });
+
+  const elapsed=Math.round(performance.now()-t0);
+
+  return{
+    title:details.title||'YouTube Video',
+    uploader:details.author||'YouTube Creator',
+    thumbnail:(details.thumbnail?.thumbnails?.slice(-1)[0]?.url)||'',
+    formats,elapsed
+  };
+}
+
 async function go(){
-const url=document.getElementById('u').value.trim();
-if(!url)return alert('Paste a video link first');
-document.getElementById('ld').style.display='block';
-document.getElementById('rc').style.display='none';
-try{
-const r=await fetch('/api/info?url='+encodeURIComponent(url));
-const d=await r.json();
-document.getElementById('ld').style.display='none';
-if(!d.success)return alert(d.error||'Failed');
-document.getElementById('img').src=d.thumbnail;
-document.getElementById('ti').innerText=d.title;
-document.getElementById('me').innerText=d.uploader+' • '+d.platform.toUpperCase();
-document.getElementById('tm').innerText='Resolved in '+d.elapsed_ms+' ms';
-const fl=document.getElementById('fl');fl.innerHTML='';
-d.formats.forEach(f=>{
-const item=document.createElement('div');item.className='fi';
-const fn=d.title+'.'+f.ext;
-let href=f.direct_url?'/api/stream?url='+encodeURIComponent(f.direct_url)+'&filename='+encodeURIComponent(fn):'/api/download?url='+encodeURIComponent(url)+'&format_id='+f.format_id;
-item.innerHTML='<div class="fd">'+f.quality_label+' ('+f.ext.toUpperCase()+') — '+f.sound_status+'</div><a class="bd" href="'+href+'" download="'+fn+'">Download ('+f.filesize_human+')</a>';
-fl.appendChild(item);
-});
-document.getElementById('rc').style.display='block';
-}catch(e){document.getElementById('ld').style.display='none';alert('Error: '+e.message)}
+  const url=document.getElementById('u').value.trim();
+  if(!url)return alert('Paste a video link first');
+  document.getElementById('ld').style.display='block';
+  document.getElementById('rc').style.display='none';
+
+  try{
+    const data=await scrapeYouTube(url);
+    document.getElementById('ld').style.display='none';
+
+    if(!data.formats.length)return alert('No downloadable formats found');
+
+    document.getElementById('img').src=data.thumbnail;
+    document.getElementById('ti').innerText=data.title;
+    document.getElementById('me').innerText=data.uploader+' • YOUTUBE';
+    document.getElementById('tm').innerText='Resolved in '+data.elapsed+' ms';
+
+    const fl=document.getElementById('fl');fl.innerHTML='';
+    data.formats.forEach(f=>{
+      const fn=data.title+'.'+f.ext;
+      const href='/api/stream?url='+encodeURIComponent(f.direct_url)+'&filename='+encodeURIComponent(fn);
+      const item=document.createElement('div');item.className='fi';
+      item.innerHTML='<div class="fd">'+f.quality_label+' ('+f.ext.toUpperCase()+') — '+f.sound_status+'</div><a class="bd" href="'+href+'" download="'+fn+'">Download ('+f.filesize_human+')</a>';
+      fl.appendChild(item);
+    });
+
+    document.getElementById('rc').style.display='block';
+  }catch(e){
+    document.getElementById('ld').style.display='none';
+    alert('Error: '+e.message);
+  }
 }
 </script>
 </body>
