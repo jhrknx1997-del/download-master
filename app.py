@@ -110,109 +110,123 @@ def format_duration(seconds):
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
 
+USER_AGENTS = [
+    "Mozilla/5.0 (Linux; Android 12; Pixel 6 Build/SQ3A.220705.004) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 11; Samsung Galaxy S21) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+]
+
 def custom_youtube_scraper(url_or_id: str) -> dict:
     try:
         match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
         vid = match.group(1) if match else url_or_id
 
-        session = get_session()
-        res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
-        
-        if res.status_code != 200:
-            reset_session()
-            session = get_session()
-            res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
-        
-        if res.status_code != 200:
-            return None
+        for ua in USER_AGENTS:
+            try:
+                session = requests.Session()
+                session.headers.update({
+                    "User-Agent": ua,
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                })
+                session.cookies.set("CONSENT", "PENDING+987", domain=".youtube.com")
+                session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
 
-        data = None
-        for s in re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL):
-            if 'streamingData' in s and 'videoDetails' in s:
-                i, j = s.find('{'), s.rfind('}')
-                if i != -1 and j != -1:
-                    try:
-                        data = json.loads(s[i:j+1])
-                        break
-                    except Exception:
-                        pass
+                res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
+                if res.status_code != 200:
+                    continue
 
-        if not data:
-            reset_session()
-            return None
+                data = None
+                for s in re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL):
+                    if 'streamingData' in s and 'videoDetails' in s:
+                        i, j = s.find('{'), s.rfind('}')
+                        if i != -1 and j != -1:
+                            try:
+                                data = json.loads(s[i:j+1])
+                                break
+                            except Exception:
+                                pass
 
-        details = data.get("videoDetails", {})
-        streaming = data.get("streamingData", {})
-        raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
+                if not data:
+                    continue
 
-        formats, seen, best_audio, best_audio_sz = [], set(), None, 0
+                details = data.get("videoDetails", {})
+                streaming = data.get("streamingData", {})
+                raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
 
-        for f in raw:
-            u = f.get("url")
-            if not u and f.get("signatureCipher"):
-                u = parse_qs(f["signatureCipher"]).get("url", [""])[0]
-            if not u: continue
+                formats, seen, best_audio, best_audio_sz = [], set(), None, 0
 
-            h = f.get("height") or 0
-            mime = f.get("mimeType", "")
+                for f in raw:
+                    u = f.get("url")
+                    if not u and f.get("signatureCipher"):
+                        u = parse_qs(f["signatureCipher"]).get("url", [""])[0]
+                    if not u: continue
 
-            if "audio" in mime:
-                sz = int(f.get("contentLength", 0))
-                if sz >= best_audio_sz:
-                    best_audio, best_audio_sz = u, sz
+                    h = f.get("height") or 0
+                    mime = f.get("mimeType", "")
+
+                    if "audio" in mime:
+                        sz = int(f.get("contentLength", 0))
+                        if sz >= best_audio_sz:
+                            best_audio, best_audio_sz = u, sz
+                        continue
+                        
+                    if h <= 0 or h in seen: continue
+                    seen.add(h)
+                    label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
+                    sz = int(f.get("contentLength", 0))
+                    formats.append({
+                        "format_id": str(f.get("itag", h)),
+                        "ext": "mp4",
+                        "height": h,
+                        "quality_label": label,
+                        "filesize": sz,
+                        "filesize_human": format_filesize(sz),
+                        "has_video": True,
+                        "has_audio": True,
+                        "is_combined": True,
+                        "need_merge": False,
+                        "direct_url": u,
+                        "url": u,
+                        "sound_status": "Sound Supported",
+                    })
+
+                if best_audio:
+                    formats.append({
+                        "format_id": "bestaudio",
+                        "ext": "mp3",
+                        "height": 0,
+                        "quality_label": "MP3 Audio (High Quality)",
+                        "filesize": best_audio_sz,
+                        "filesize_human": format_filesize(best_audio_sz),
+                        "has_video": False,
+                        "has_audio": True,
+                        "is_combined": False,
+                        "need_merge": False,
+                        "direct_url": best_audio,
+                        "url": best_audio,
+                        "sound_status": "Audio MP3",
+                    })
+
+                formats.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
+                if formats:
+                    return {
+                        "id": vid,
+                        "title": details.get("title", "YouTube Video"),
+                        "uploader": details.get("author", "YouTube Creator"),
+                        "thumbnail": details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", ""),
+                        "duration": int(details.get("lengthSeconds", 0)),
+                        "webpage_url": f"https://www.youtube.com/watch?v={vid}",
+                        "formats": formats,
+                    }
+            except Exception:
                 continue
-                
-            if h <= 0 or h in seen: continue
-            seen.add(h)
-            label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
-            sz = int(f.get("contentLength", 0))
-            formats.append({
-                "format_id": str(f.get("itag", h)),
-                "ext": "mp4",
-                "height": h,
-                "quality_label": label,
-                "filesize": sz,
-                "filesize_human": format_filesize(sz),
-                "has_video": True,
-                "has_audio": True,
-                "is_combined": True,
-                "need_merge": False,
-                "direct_url": u,
-                "url": u,
-                "sound_status": "Sound Supported",
-            })
 
-        if best_audio:
-            formats.append({
-                "format_id": "bestaudio",
-                "ext": "mp3",
-                "height": 0,
-                "quality_label": "MP3 Audio (High Quality)",
-                "filesize": best_audio_sz,
-                "filesize_human": format_filesize(best_audio_sz),
-                "has_video": False,
-                "has_audio": True,
-                "is_combined": False,
-                "need_merge": False,
-                "direct_url": best_audio,
-                "url": best_audio,
-                "sound_status": "Audio MP3",
-            })
-
-        formats.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
-        if not formats: return None
-
-        return {
-            "id": vid,
-            "title": details.get("title", "YouTube Video"),
-            "uploader": details.get("author", "YouTube Creator"),
-            "thumbnail": details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", ""),
-            "duration": int(details.get("lengthSeconds", 0)),
-            "webpage_url": f"https://www.youtube.com/watch?v={vid}",
-            "formats": formats,
-        }
+        return None
     except Exception:
         return None
+
 
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
