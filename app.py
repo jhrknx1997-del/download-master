@@ -74,6 +74,18 @@ def extract_json_object(text, start_str):
                         return None
     return None
 
+def extract_player_response(html: str) -> dict:
+    for s in re.findall(r'<script[^>]*>(.*?)</script>', html, re.DOTALL):
+        if 'streamingData' in s and 'videoDetails' in s:
+            start = s.find('{')
+            end = s.rfind('}')
+            if start != -1 and end != -1:
+                try:
+                    return json.loads(s[start:end+1])
+                except Exception:
+                    pass
+    return None
+
 def custom_youtube_web_scraper(url_or_id: str) -> dict:
     try:
         video_id_match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
@@ -89,22 +101,7 @@ def custom_youtube_web_scraper(url_or_id: str) -> dict:
         if res.status_code != 200:
             return None
 
-        # Extract player response payload from HTML
-        data = None
-        for s in re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL):
-            if "streamingData" in s and "videoDetails" in s:
-                start = s.find('{')
-                end = s.rfind('}')
-                if start != -1 and end != -1:
-                    try:
-                        data = json.loads(s[start:end+1])
-                        break
-                    except Exception:
-                        pass
-                        
-        if not data:
-            data = extract_json_object(res.text, "ytInitialPlayerResponse = ")
-
+        data = extract_player_response(res.text)
         if not data:
             return None
             
@@ -192,6 +189,7 @@ def custom_youtube_web_scraper(url_or_id: str) -> dict:
         }
     except Exception:
         return None
+
 
 def get_oembed_fallback(url: str) -> dict:
     try:
