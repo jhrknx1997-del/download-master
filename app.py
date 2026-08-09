@@ -30,6 +30,29 @@ info_cache: TTLCache = TTLCache(maxsize=3000, ttl=900)
 # Global dictionary to track active background download jobs
 download_jobs = {}
 
+# High-Speed Residential Proxy Pool (10 Nodes)
+RAW_PROXIES = [
+    "31.59.20.176:6754:ycbfzlos:qh3lq7jr89uw",
+    "31.56.127.193:7684:ycbfzlos:qh3lq7jr89uw",
+    "45.38.107.97:6014:ycbfzlos:qh3lq7jr89uw",
+    "198.105.121.200:6462:ycbfzlos:qh3lq7jr89uw",
+    "64.137.96.74:6641:ycbfzlos:qh3lq7jr89uw",
+    "198.23.243.226:6361:ycbfzlos:qh3lq7jr89uw",
+    "38.154.185.97:6370:ycbfzlos:qh3lq7jr89uw",
+    "84.247.60.125:6095:ycbfzlos:qh3lq7jr89uw",
+    "142.111.67.146:5611:ycbfzlos:qh3lq7jr89uw",
+    "191.96.254.138:6185:ycbfzlos:qh3lq7jr89uw",
+]
+
+PROXIES = []
+for p in RAW_PROXIES:
+    parts = p.split(":")
+    PROXIES.append(f"http://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}")
+
+def get_random_proxy():
+    import random
+    return random.choice(PROXIES)
+
 YDL_BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
@@ -45,6 +68,7 @@ YDL_BASE_OPTS = {
         }
     }
 }
+
 
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
@@ -160,6 +184,8 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
         for ua in USER_AGENTS:
             try:
                 session = requests.Session()
+                proxy = get_random_proxy()
+                session.proxies = {"http": proxy, "https": proxy}
                 session.headers.update({
                     "User-Agent": ua,
                     "Accept-Language": "en-US,en;q=0.9",
@@ -169,6 +195,7 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                 session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
 
                 res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
+
                 if res.status_code != 200:
                     continue
 
@@ -543,8 +570,10 @@ def bg_download_task(job_id, url, format_id):
         "merge_output_format": "mp4" if not is_mp3 else None,
         "postprocessors": postprocessors,
         "progress_hooks": [progress_hook],
+        "proxy": get_random_proxy(),
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     }
+
 
     try:
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
