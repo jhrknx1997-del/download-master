@@ -224,11 +224,12 @@ def extract_metadata(url: str) -> dict:
         if scraped and scraped.get("formats"):
             info_cache[key] = scraped
             return scraped
+        return None
 
     if key in info_cache:
         return info_cache[key]
 
-    # 2. Fallback to yt_dlp for TikTok, Instagram, Facebook, X, Reddit
+    # 2. Use yt_dlp for TikTok, Instagram, Facebook, X, Reddit
     opts = dict(YDL_BASE_OPTS)
     if "tiktok.com" in url:
         opts["format"] = "best"
@@ -239,6 +240,7 @@ def extract_metadata(url: str) -> dict:
     if info:
         info_cache[key] = info
     return info
+
 
 
 def process_formats(info: dict) -> list:
