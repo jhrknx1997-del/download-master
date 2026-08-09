@@ -159,12 +159,17 @@ def process_formats(info: dict) -> list:
     processed = []
     seen_heights = set()
 
+    duration_sec = info.get("duration") or 180
+
     best_audio_size = 0
+    best_audio_url = ""
     for f in raw_formats:
         if f.get("vcodec") == "none" and f.get("acodec") != "none":
             sz = f.get("filesize") or f.get("filesize_approx") or 0
             if sz > best_audio_size:
                 best_audio_size = sz
+            if not best_audio_url and f.get("url"):
+                best_audio_url = f.get("url")
 
     # 1. Process Video formats
     for f in raw_formats:
@@ -178,10 +183,7 @@ def process_formats(info: dict) -> list:
             continue
 
         height = f.get("height") or 0
-        if height <= 0:
-            continue
-
-        if height in seen_heights:
+        if height <= 0 or height in seen_heights:
             continue
         seen_heights.add(height)
 
@@ -208,30 +210,55 @@ def process_formats(info: dict) -> list:
             "sound_status": "Sound Supported" if is_combined else "Auto-Merged Sound",
         })
 
-    # 2. Add Audio-Only (MP3) Format
-    best_audio_format = None
-    for f in raw_formats:
-        if f.get("vcodec") == "none" and f.get("acodec") != "none":
-            best_audio_format = f
+    # 2. Add Standard Qualities (1080p, 720p, 480p, 360p, 240p, 144p) if YouTube omitted them
+    STANDARD_QUALITIES = [
+        (1080, "1080p Full HD", "137"),
+        (720, "720p HD", "22"),
+        (480, "480p", "135"),
+        (360, "360p", "18"),
+        (240, "240p", "133"),
+        (144, "144p", "160"),
+    ]
+    for req_h, req_label, req_fid in STANDARD_QUALITIES:
+        if req_h not in seen_heights:
+            seen_heights.add(req_h)
+            bitrate_map = {1080: 312*1024, 720: 150*1024, 480: 75*1024, 360: 38*1024, 240: 25*1024, 144: 12*1024}
+            est_sz = int((bitrate_map.get(req_h, 50*1024) + 16*1024) * duration_sec)
+            processed.append({
+                "format_id": req_fid,
+                "ext": "mp4",
+                "quality_label": req_label,
+                "height": req_h,
+                "filesize": est_sz,
+                "filesize_human": format_filesize(est_sz),
+                "has_video": True,
+                "has_audio": True,
+                "is_combined": False,
+                "need_merge": True,
+                "direct_url": "",
+                "sound_status": "Sound Supported",
+            })
 
-    if best_audio_format or not processed:
-        processed.append({
-            "format_id": "bestaudio",
-            "ext": "mp3",
-            "quality_label": "MP3 Audio (High Quality)",
-            "height": 0,
-            "filesize": best_audio_size,
-            "filesize_human": format_filesize(best_audio_size),
-            "has_video": False,
-            "has_audio": True,
-            "is_combined": False,
-            "need_merge": True,
-            "direct_url": best_audio_format.get("url") if best_audio_format else "",
-            "sound_status": "Audio MP3",
-        })
+    # 3. Add Audio-Only (MP3) Format
+    audio_final_sz = best_audio_size or int(16 * 1024 * duration_sec)
+    processed.append({
+        "format_id": "bestaudio",
+        "ext": "mp3",
+        "quality_label": "MP3 Audio (High Quality)",
+        "height": 0,
+        "filesize": audio_final_sz,
+        "filesize_human": format_filesize(audio_final_sz),
+        "has_video": False,
+        "has_audio": True,
+        "is_combined": False,
+        "need_merge": True,
+        "direct_url": best_audio_url,
+        "sound_status": "Audio MP3",
+    })
 
     processed.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
     return processed
+
 
 @app.route("/")
 def index():
