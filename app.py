@@ -349,8 +349,14 @@ def format_duration(seconds):
 
 def process_formats(info: dict) -> list:
     raw_formats = info.get("formats") or []
+    if raw_formats and isinstance(raw_formats, list):
+        first = raw_formats[0]
+        if "quality_label" in first or "has_video" in first:
+            return raw_formats
+
     processed = []
     seen_heights = set()
+
 
     best_audio_size = 0
     for f in raw_formats:
