@@ -1,6 +1,6 @@
 """
-SnapFetch Pro v5.1 — Snaptube-Architecture High Performance Media Downloader Engine
-Fully Sound-Supported Auto-Merging Video/Audio Pipeline with Zero-Leak Temp File Cleanup & RFC 5987 UTF-8 Headers.
+SnapFetch Pro v5.1 — Snaptube-Architecture Hybrid Media Downloader Engine
+Ultra-Fast Mobile Session Scraper + Sound-Supported Auto-Merging Video/Audio Pipeline.
 """
 
 import os
@@ -8,6 +8,7 @@ import re
 import glob
 import time
 import uuid
+import json
 import tempfile
 import hashlib
 import threading
@@ -15,7 +16,7 @@ import imageio_ffmpeg
 import requests
 import yt_dlp
 from cachetools import TTLCache
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, parse_qs
 from flask import Flask, Response, jsonify, request, stream_with_context, redirect
 
 app = Flask(__name__)
@@ -51,6 +52,28 @@ PLATFORM_PATTERNS = {
     "pinterest": r"pinterest\.com",
 }
 
+_session = None
+
+def get_session():
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        })
+        try:
+            _session.get("https://www.youtube.com/", timeout=5)
+        except Exception:
+            pass
+        _session.cookies.set("CONSENT", "PENDING+987", domain=".youtube.com")
+        _session.cookies.set("SOCS", "CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjMwODI5LjA3X3AxGgJlbiACGgYIgJnsBhAB", domain=".youtube.com")
+    return _session
+
+def reset_session():
+    global _session
+    _session = None
+
 def detect_platform(url: str) -> str:
     for name, pattern in PLATFORM_PATTERNS.items():
         if re.search(pattern, url, re.IGNORECASE):
@@ -67,23 +90,6 @@ def clean_url(url: str) -> str:
             break
         url = decoded
     return url
-
-def extract_metadata(url: str) -> dict:
-    url = clean_url(url)
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    if key in info_cache:
-        return info_cache[key]
-    
-    opts = dict(YDL_BASE_OPTS)
-    if "tiktok.com" in url:
-        opts["format"] = "best"
-
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-
-    if info:
-        info_cache[key] = info
-    return info
 
 def format_filesize(bytes_val):
     if not bytes_val or bytes_val <= 0:
@@ -104,7 +110,139 @@ def format_duration(seconds):
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
 
+def custom_youtube_scraper(url_or_id: str) -> dict:
+    try:
+        match = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url_or_id)
+        vid = match.group(1) if match else url_or_id
+
+        session = get_session()
+        res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
+        
+        if res.status_code != 200:
+            reset_session()
+            session = get_session()
+            res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
+        
+        if res.status_code != 200:
+            return None
+
+        data = None
+        for s in re.findall(r'<script[^>]*>(.*?)</script>', res.text, re.DOTALL):
+            if 'streamingData' in s and 'videoDetails' in s:
+                i, j = s.find('{'), s.rfind('}')
+                if i != -1 and j != -1:
+                    try:
+                        data = json.loads(s[i:j+1])
+                        break
+                    except Exception:
+                        pass
+
+        if not data:
+            reset_session()
+            return None
+
+        details = data.get("videoDetails", {})
+        streaming = data.get("streamingData", {})
+        raw = streaming.get("formats", []) + streaming.get("adaptiveFormats", [])
+
+        formats, seen, best_audio, best_audio_sz = [], set(), None, 0
+
+        for f in raw:
+            u = f.get("url")
+            if not u and f.get("signatureCipher"):
+                u = parse_qs(f["signatureCipher"]).get("url", [""])[0]
+            if not u: continue
+
+            h = f.get("height") or 0
+            mime = f.get("mimeType", "")
+
+            if "audio" in mime:
+                sz = int(f.get("contentLength", 0))
+                if sz >= best_audio_sz:
+                    best_audio, best_audio_sz = u, sz
+                continue
+                
+            if h <= 0 or h in seen: continue
+            seen.add(h)
+            label = f"{h}p Full HD" if h >= 1080 else (f"{h}p HD" if h >= 720 else f"{h}p")
+            sz = int(f.get("contentLength", 0))
+            formats.append({
+                "format_id": str(f.get("itag", h)),
+                "ext": "mp4",
+                "height": h,
+                "quality_label": label,
+                "filesize": sz,
+                "filesize_human": format_filesize(sz),
+                "has_video": True,
+                "has_audio": True,
+                "is_combined": True,
+                "need_merge": False,
+                "direct_url": u,
+                "url": u,
+                "sound_status": "Sound Supported",
+            })
+
+        if best_audio:
+            formats.append({
+                "format_id": "bestaudio",
+                "ext": "mp3",
+                "height": 0,
+                "quality_label": "MP3 Audio (High Quality)",
+                "filesize": best_audio_sz,
+                "filesize_human": format_filesize(best_audio_sz),
+                "has_video": False,
+                "has_audio": True,
+                "is_combined": False,
+                "need_merge": False,
+                "direct_url": best_audio,
+                "url": best_audio,
+                "sound_status": "Audio MP3",
+            })
+
+        formats.sort(key=lambda x: (x["has_video"], x["height"]), reverse=True)
+        if not formats: return None
+
+        return {
+            "id": vid,
+            "title": details.get("title", "YouTube Video"),
+            "uploader": details.get("author", "YouTube Creator"),
+            "thumbnail": details.get("thumbnail", {}).get("thumbnails", [{}])[-1].get("url", ""),
+            "duration": int(details.get("lengthSeconds", 0)),
+            "webpage_url": f"https://www.youtube.com/watch?v={vid}",
+            "formats": formats,
+        }
+    except Exception:
+        return None
+
+def extract_metadata(url: str) -> dict:
+    url = clean_url(url)
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    if key in info_cache:
+        return info_cache[key]
+    
+    # 1. Try Custom Mobile Session Scraper FIRST for YouTube (Bypasses bot login gate)
+    if "youtube.com" in url or "youtu.be" in url:
+        scraped = custom_youtube_scraper(url)
+        if scraped and scraped.get("formats"):
+            info_cache[key] = scraped
+            return scraped
+
+    # 2. Fallback to yt_dlp for TikTok, Instagram, Facebook, X, Reddit
+    opts = dict(YDL_BASE_OPTS)
+    if "tiktok.com" in url:
+        opts["format"] = "best"
+
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+    if info:
+        info_cache[key] = info
+    return info
+
 def process_formats(info: dict) -> list:
+    if "formats" in info and isinstance(info["formats"], list) and info["formats"] and "quality_label" in info["formats"][0]:
+        return info["formats"]
+
     raw_formats = info.get("formats") or []
     processed = []
     seen_heights = set()
@@ -241,7 +379,7 @@ def api_direct():
     if format_id:
         target = next((f for f in formats if str(f.get("format_id")) == str(format_id)), None)
     
-    direct_url = target.get("url") if target else info.get("url")
+    direct_url = target.get("direct_url") if target else (target.get("url") if target else None)
     if not direct_url:
         return jsonify({"error": "Direct stream URL not found"}), 404
 
@@ -374,10 +512,16 @@ def api_start_download():
 
 
 @app.route("/api/download", methods=["GET"])
+@app.route("/api/stream", methods=["GET"])
 def api_download():
     """ Direct stream download endpoint for browser links """
     url = clean_url(request.args.get("url", ""))
     format_id = request.args.get("format_id", "").strip()
+    direct_stream_url = request.args.get("url", "")
+    
+    if direct_stream_url and direct_stream_url.startswith("http") and "googlevideo.com" in direct_stream_url:
+        return redirect(direct_stream_url)
+
     if not url:
         return jsonify({"error": "Missing URL"}), 400
 
@@ -464,7 +608,8 @@ def api_download():
         )
 
     except Exception as e:
-        direct_url = info.get("url")
+        formats = info.get("formats", [])
+        direct_url = formats[0].get("direct_url") if formats else info.get("url")
         if direct_url:
             return redirect(direct_url)
         return jsonify({"error": f"Download error: {str(e)}"}), 502
