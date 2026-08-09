@@ -115,9 +115,11 @@ def extract_metadata(url: str) -> dict:
     if key in info_cache:
         return info_cache[key]
     
-    # Try proxies sequentially
-    for proxy in get_proxy_list():
+    # Try Direct first (fastest, 300ms), followed by top 2 residential proxies with 3s timeout
+    proxy_attempts = [None] + get_proxy_list()[:2]
+    for proxy in proxy_attempts:
         opts = dict(YDL_BASE_OPTS)
+        opts["socket_timeout"] = 3
         if proxy:
             opts["proxy"] = proxy
         if "tiktok.com" in url:
@@ -133,6 +135,7 @@ def extract_metadata(url: str) -> dict:
             continue
 
     return None
+
 
 
 def format_filesize(bytes_val):
