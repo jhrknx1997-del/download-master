@@ -48,23 +48,14 @@ YDL_BASE_OPTS = {
 
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    if key in info_cache:
-        cached = info_cache[key]
-        if cached and isinstance(cached.get("formats"), list) and len(cached["formats"]) >= 4:
-            return cached
-        else:
-            info_cache.pop(key, None)
     
-    # Tier 1: Try Custom Mobile Session Scraper FIRST for YouTube
-    scraped = None
+    # 1. For YouTube links, ALWAYS return custom_youtube_scraper (bypasses bot login gate completely)
     if "youtube.com" in url or "youtu.be" in url:
         scraped = custom_youtube_scraper(url)
-        if scraped and isinstance(scraped.get("formats"), list) and len(scraped["formats"]) >= 4:
-            info_cache[key] = scraped
+        if scraped:
             return scraped
 
-    # Tier 2: Multi-client extraction engine (yt_dlp) - populates 1080p, 720p, 480p, 360p, 240p, 144p, MP3
+    # 2. For TikTok, Instagram, Facebook, X, Reddit, use yt_dlp
     opts = dict(YDL_BASE_OPTS)
     if "tiktok.com" in url:
         opts["format"] = "best"
@@ -72,18 +63,13 @@ def extract_metadata(url: str) -> dict:
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
-        if info and info.get("formats"):
-            info_cache[key] = info
+        if info:
             return info
     except Exception:
         pass
 
-    # Tier 3: Fallback to scraped if yt_dlp failed
-    if scraped:
-        info_cache[key] = scraped
-        return scraped
-
     return None
+
 
 
 
