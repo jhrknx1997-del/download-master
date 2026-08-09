@@ -216,16 +216,12 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
 
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
-    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
     
-    # 1. Try Custom Mobile Session Scraper FIRST for YouTube (Bypasses bot login gate)
+    # 1. For YouTube links, ALWAYS use Custom Mobile Session Scraper (0 Bot Blocks)
     if "youtube.com" in url or "youtu.be" in url:
-        scraped = custom_youtube_scraper(url)
-        if scraped and scraped.get("formats"):
-            info_cache[key] = scraped
-            return scraped
-        return None
+        return custom_youtube_scraper(url)
 
+    key = hashlib.sha256(url.encode("utf-8")).hexdigest()
     if key in info_cache:
         return info_cache[key]
 
@@ -240,6 +236,7 @@ def extract_metadata(url: str) -> dict:
     if info:
         info_cache[key] = info
     return info
+
 
 
 
