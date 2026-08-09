@@ -63,8 +63,7 @@ def scrape_youtube(url_or_id):
         session = get_session()
         res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
         
-        # If rate limited, reset session and retry once
-        if res.status_code == 429:
+        if res.status_code != 200:
             reset_session()
             session = get_session()
             res = session.get(f"https://m.youtube.com/watch?v={vid}", timeout=6)
@@ -79,7 +78,10 @@ def scrape_youtube(url_or_id):
                 if i != -1 and j != -1:
                     try: data = json.loads(s[i:j+1]); break
                     except: pass
-        if not data: return None
+        if not data:
+            reset_session()
+            return None
+
 
         details = data.get("videoDetails", {})
         streaming = data.get("streamingData", {})
