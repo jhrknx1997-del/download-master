@@ -200,8 +200,9 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
 
                 for f in raw:
                     u = f.get("url")
-                    if not u and f.get("signatureCipher"):
-                        u = parse_qs(f["signatureCipher"]).get("url", [""])[0]
+                    cipher_str = f.get("signatureCipher") or f.get("cipher")
+                    if not u and cipher_str:
+                        u = parse_qs(cipher_str).get("url", [""])[0]
                     if not u: continue
 
                     h = f.get("height") or 0
@@ -232,6 +233,7 @@ def custom_youtube_scraper(url_or_id: str) -> dict:
                         "url": u,
                         "sound_status": "Sound Supported",
                     })
+
 
                 if best_audio:
                     formats.append({
