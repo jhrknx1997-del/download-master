@@ -237,11 +237,19 @@ def clean_url(url: str) -> str:
 def extract_metadata(url: str) -> dict:
     url = clean_url(url)
     key = hashlib.sha256(url.encode("utf-8")).hexdigest()
-    if key in info_cache:
-        return info_cache[key]
-    
     platform = detect_platform(url)
     is_youtube = platform == "youtube"
+
+    try:
+        no_cache = request.args.get("nocache")
+    except Exception:
+        no_cache = False
+
+    if key in info_cache and not no_cache:
+        cached_info = info_cache[key]
+        cached_fmts = cached_info.get("formats", [])
+        if len(cached_fmts) > 2 or not is_youtube:
+            return cached_info
 
     base_opts = dict(YDL_BASE_OPTS)
     if "tiktok.com" in url:
