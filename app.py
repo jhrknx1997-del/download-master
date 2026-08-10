@@ -228,6 +228,13 @@ def clean_url(url: str) -> str:
         if decoded == url:
             break
         url = decoded
+
+    # Normalize YouTube URLs to clean canonical watch links
+    if "youtube.com" in url or "youtu.be" in url:
+        m = re.search(r"(?:v=|\/|be\/)([a-zA-Z0-9_-]{11})", url)
+        if m:
+            return f"https://www.youtube.com/watch?v={m.group(1)}"
+
     return url
 
 def extract_metadata(url: str) -> dict:
