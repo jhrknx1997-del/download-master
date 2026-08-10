@@ -72,30 +72,105 @@ def parse_proxy(proxy_str):
 
 PROXIES = [p for p in (parse_proxy(s) for s in RAW_PROXIES) if p]
 
-class ProxyManager:
-    def __init__(self, proxy_list):
-        self.proxies = list(proxy_list)
+class SmartProxyManager:
+    def __init__(self, static_proxies):
+        self.static_proxies = list(static_proxies)
+        self.proxies = list(static_proxies)
+        self.failures = {p: 0 for p in self.proxies}
         self.index = 0
         self.lock = threading.Lock()
-        self.failures = {p: 0 for p in self.proxies}
+        self.is_refreshing = False
+        self.last_refresh_time = 0
+
+        # Start initial background proxy scraper & periodic refresh worker
+        threading.Thread(target=self._initial_scrape_worker, daemon=True).start()
+
+    def _initial_scrape_worker(self):
+        time.sleep(1)
+        self.refresh_proxies()
+        while True:
+            time.sleep(600)  # Refresh every 10 minutes
+
+    def refresh_proxies(self):
+        with self.lock:
+            if self.is_refreshing:
+                return
+            self.is_refreshing = True
+
+        def scrape_and_validate():
+            try:
+                sources = [
+                    "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/http.txt",
+                    "https://api.proxyscrape.com/v2/?request=getproxies&protocol=http&timeout=2500&country=all&ssl=all&anonymity=all",
+                    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/master/http.txt",
+                ]
+                candidates = set()
+                for src in sources:
+                    try:
+                        r = requests.get(src, timeout=5)
+                        if r.status_code == 200:
+                            for line in r.text.splitlines()[:150]:
+                                line = line.strip()
+                                if line and ":" in line and not line.startswith("#"):
+                                    fmt_p = f"http://{line}" if not line.startswith("http") else line
+                                    candidates.add(fmt_p)
+                    except Exception:
+                        pass
+
+                def validate_proxy(p):
+                    try:
+                        r = requests.get("https://www.youtube.com/generate_204", proxies={"http": p, "https": p}, timeout=3)
+                        if r.status_code == 204:
+                            return p
+                    except Exception:
+                        pass
+                    return None
+
+                validated = []
+                with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+                    results = executor.map(validate_proxy, list(candidates)[:200])
+                    for res in results:
+                        if res:
+                            validated.append(res)
+
+                with self.lock:
+                    combined = self.static_proxies + validated
+                    self.proxies = list(dict.fromkeys(combined))
+                    for p in self.proxies:
+                        if p not in self.failures:
+                            self.failures[p] = 0
+                    self.last_refresh_time = time.time()
+            except Exception:
+                pass
+            finally:
+                with self.lock:
+                    self.is_refreshing = False
+
+        threading.Thread(target=scrape_and_validate, daemon=True).start()
 
     def get_proxy(self):
-        if not self.proxies:
-            return None
         with self.lock:
-            healthy = [p for p in self.proxies if self.failures[p] < 5]
-            candidates = healthy if healthy else self.proxies
+            healthy = [p for p in self.proxies if self.failures.get(p, 0) < 3]
+            if not healthy:
+                if not self.is_refreshing and (time.time() - self.last_refresh_time > 60):
+                    threading.Thread(target=self.refresh_proxies, daemon=True).start()
+                return None
+
+            res_healthy = [p for p in healthy if p in self.static_proxies]
+            candidates = res_healthy if res_healthy else healthy
+
             proxy = candidates[self.index % len(candidates)]
             self.index += 1
             return proxy
 
     def report_failure(self, proxy, error_str=""):
-        if proxy and proxy in self.failures:
+        if proxy:
             with self.lock:
-                if "402" in str(error_str) or "Payment Required" in str(error_str) or "Tunnel connection failed" in str(error_str):
-                    self.failures[proxy] = 999
-                else:
-                    self.failures[proxy] += 1
+                if proxy in self.failures:
+                    if "402" in str(error_str) or "Payment Required" in str(error_str) or "Tunnel connection failed" in str(error_str):
+                        self.failures[proxy] = 999
+                    else:
+                        self.failures[proxy] += 1
 
     def report_success(self, proxy):
         if proxy and proxy in self.failures:
@@ -104,9 +179,9 @@ class ProxyManager:
 
     def has_healthy_proxies(self):
         with self.lock:
-            return any(f < 5 for f in self.failures.values())
+            return any(f < 3 for f in self.failures.values())
 
-proxy_manager = ProxyManager(PROXIES)
+proxy_manager = SmartProxyManager(PROXIES)
 
 YDL_BASE_OPTS = {
     "quiet": True,
