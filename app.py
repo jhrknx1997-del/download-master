@@ -156,10 +156,7 @@ class SmartProxyManager:
                     threading.Thread(target=self.refresh_proxies, daemon=True).start()
                 return None
 
-            res_healthy = [p for p in healthy if p in self.static_proxies]
-            candidates = res_healthy if res_healthy else healthy
-
-            proxy = candidates[self.index % len(candidates)]
+            proxy = healthy[self.index % len(healthy)]
             self.index += 1
             return proxy
 
@@ -250,7 +247,7 @@ def extract_metadata(url: str) -> dict:
     if "tiktok.com" in url:
         base_opts["format"] = "best"
 
-    attempts = len(PROXIES) if is_youtube else 2
+    attempts = 5 if is_youtube else 2
     last_error = None
 
     for attempt in range(attempts):
